@@ -6,14 +6,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 import analysis
+import drive_import
 import igc_parser
 import weather as weather_svc
 from database import SessionLocal, init_db
@@ -182,6 +185,63 @@ async def upload(files: list[UploadFile] = File(...), db: Session = Depends(get_
         except Exception as e:  # pragma: no cover
             db.rollback()
             results.append(UploadResultOut(filename=f.filename or "unknown.igc", success=False, error=str(e)))
+    return results
+
+
+class DriveImportRequest(BaseModel):
+    url: str
+    max_files: int = 200
+
+
+@app.post("/api/import-drive-folder", response_model=list[UploadResultOut])
+def import_drive_folder(req: DriveImportRequest, db: Session = Depends(get_db)):
+    """Import all IGC files from a publicly-shared Google Drive folder URL.
+
+    The folder must be set to "Anyone with the link can view". We list the
+    folder via Google's embedded folder view (or the Drive API when
+    GOOGLE_DRIVE_API_KEY is configured) and feed each file through the same
+    ingest pipeline as a normal upload.
+    """
+    folder_id = drive_import.extract_folder_id(req.url)
+    if not folder_id:
+        raise HTTPException(
+            status_code=400,
+            detail="could not extract folder ID from URL (expected something like https://drive.google.com/drive/folders/...)",
+        )
+
+    try:
+        files = drive_import.list_folder(folder_id)
+    except httpx.HTTPError as e:  # type: ignore[name-defined]
+        raise HTTPException(status_code=502, detail=f"failed to access Drive: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"failed to list folder: {e}")
+
+    if not files:
+        raise HTTPException(
+            status_code=404,
+            detail="no files found — make sure the folder is shared with 'Anyone with the link'",
+        )
+
+    igc_files = [f for f in files if f.name.lower().endswith(".igc")]
+    if not igc_files:
+        raise HTTPException(
+            status_code=404,
+            detail=f"folder has {len(files)} files but none end in .igc",
+        )
+
+    igc_files = igc_files[: req.max_files]
+    results: list[UploadResultOut] = []
+    for f in igc_files:
+        try:
+            content = drive_import.download_file(f.file_id)
+        except Exception as e:
+            results.append(UploadResultOut(filename=f.name, success=False, error=f"download failed: {e}"))
+            continue
+        try:
+            results.append(_ingest_one(db, f.name, content))
+        except Exception as e:  # pragma: no cover
+            db.rollback()
+            results.append(UploadResultOut(filename=f.name, success=False, error=str(e)))
     return results
 
 

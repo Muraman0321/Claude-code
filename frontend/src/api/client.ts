@@ -89,4 +89,23 @@ export const api = {
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     return res.json();
   },
+
+  async importDriveFolder(url: string, maxFiles = 200): Promise<UploadResult[]> {
+    const res = await fetch(`${BASE}/import-drive-folder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, max_files: maxFiles }),
+    });
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const body = await res.json();
+        if (body.detail) detail = body.detail;
+      } catch {
+        // ignore
+      }
+      throw new Error(detail);
+    }
+    return res.json();
+  },
 };

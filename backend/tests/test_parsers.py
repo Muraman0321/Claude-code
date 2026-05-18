@@ -246,6 +246,73 @@ def test_weather_picks_nearest_hour(monkeypatch):
     assert snap.wind_dir_deg == 200
 
 
+def test_extract_drive_folder_id():
+    from drive_import import extract_folder_id
+    assert extract_folder_id("https://drive.google.com/drive/folders/19vBIjr95cX6eLUfrxVHJybogCr7_64YQ") == "19vBIjr95cX6eLUfrxVHJybogCr7_64YQ"
+    assert extract_folder_id("https://drive.google.com/drive/folders/19vBIjr95cX6eLUfrxVHJybogCr7_64YQ?usp=sharing") == "19vBIjr95cX6eLUfrxVHJybogCr7_64YQ"
+    assert extract_folder_id("https://drive.google.com/drive/u/0/folders/abc_DEF-123456789012345") == "abc_DEF-123456789012345"
+    assert extract_folder_id("https://drive.google.com/open?id=abc_DEF-123456789012345") == "abc_DEF-123456789012345"
+    assert extract_folder_id("19vBIjr95cX6eLUfrxVHJybogCr7_64YQ") == "19vBIjr95cX6eLUfrxVHJybogCr7_64YQ"
+    assert extract_folder_id("not a url") is None
+    assert extract_folder_id("") is None
+
+
+def test_drive_list_via_embedded_view_parses_entries(monkeypatch):
+    import drive_import
+
+    # Realistic fragment of the embedded folder view that Drive serves.
+    fake_html = """
+    <html><body>
+    <div class="flip-grid">
+      <div class="flip-entry" data-id="1BMVnlvuNwIv2_mpz4HJTtIhljktqxcc1">
+        <a href="https://drive.google.com/file/d/1BMVnlvuNwIv2_mpz4HJTtIhljktqxcc1/view?usp=drive_link">
+          <div class="flip-entry-thumb">...</div>
+        </a>
+        <div class="flip-entry-title" title="26.04.11_JA04KH_shin.igc">26.04.11_JA04KH_shin.igc</div>
+      </div>
+      <div class="flip-entry" data-id="1vtjOMaGVUL6yo4DzxkVG4Mn6ZUXi2HzV">
+        <a href="https://drive.google.com/file/d/1vtjOMaGVUL6yo4DzxkVG4Mn6ZUXi2HzV/view">
+          ...
+        </a>
+        <div class="flip-entry-title">26.04.12_JA2408_Tajima.igc</div>
+      </div>
+    </div>
+    </body></html>
+    """
+
+    class FakeResp:
+        text = fake_html
+        def raise_for_status(self): pass
+
+    def fake_get(url, timeout, follow_redirects, headers):
+        assert "embeddedfolderview" in url
+        return FakeResp()
+
+    monkeypatch.setattr(drive_import.httpx, "get", fake_get)
+    files = drive_import._list_via_embedded_view("FOLDER", timeout=5.0)
+    assert len(files) == 2
+    names = {f.name for f in files}
+    assert "26.04.11_JA04KH_shin.igc" in names
+    assert "26.04.12_JA2408_Tajima.igc" in names
+
+
+def test_drive_download_file(monkeypatch):
+    import drive_import
+
+    class FakeResp:
+        content = b"FAKE IGC CONTENTS"
+        def raise_for_status(self): pass
+
+    def fake_get(url, params, timeout, follow_redirects, headers):
+        assert params["id"] == "MY_FILE_ID"
+        assert params["export"] == "download"
+        return FakeResp()
+
+    monkeypatch.setattr(drive_import.httpx, "get", fake_get)
+    data = drive_import.download_file("MY_FILE_ID")
+    assert data == b"FAKE IGC CONTENTS"
+
+
 def test_weather_returns_none_on_error(monkeypatch):
     import weather as wx
 
