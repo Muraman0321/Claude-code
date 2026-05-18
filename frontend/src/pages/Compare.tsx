@@ -34,7 +34,15 @@ const COLUMNS: ColumnDef[] = [
   { key: "avg_climb_in_thermals_ms", label: "平均上昇率", render: (f) => fmtNum(f.avg_climb_in_thermals_ms, 2, "m/s"), numeric: true },
   { key: "max_ground_speed_kmh", label: "最高速度", render: (f) => fmtNum(f.max_ground_speed_kmh, 0, "km/h"), numeric: true },
   { key: "best_glide_ratio", label: "最大L/D", render: (f) => fmtNum(f.best_glide_ratio, 1), numeric: true },
-  { key: "thermal_count", label: "サーマル", render: (f) => f.thermal_count ?? 0, numeric: true },
+  {
+    key: "thermal_count",
+    label: "サーマル密度(件/h)",
+    render: (f) => {
+      const h = (f.duration_s ?? 0) / 3600;
+      return h > 0 ? fmtNum((f.thermal_count ?? 0) / h, 1, "件/h") : "—";
+    },
+    numeric: true,
+  },
 ];
 
 const COLORS = [
@@ -44,41 +52,57 @@ const COLORS = [
 
 const MAX_SELECTED = 100;
 
-// Compute a geodesic capsule polygon from start→end with the given radius (meters).
-// Returns a closed [lat, lon] ring approximating a stadium shape.
-function capsulePolygon(
+// Compute a geodesic rounded-rectangle polygon aligned along start→end.
+// halfWidthM is the half-width; corner radius is 35% of that.
+// Degrades gracefully to a rounded square when start ≈ end.
+function roundedRectPolygon(
   sLat: number, sLon: number,
   eLat: number, eLon: number,
-  radiusM: number,
-  arcSteps = 8,
+  halfWidthM: number,
+  arcSteps = 4,
 ): [number, number][] {
   const R = 6_371_000;
-  function offsetPt(lat: number, lon: number, brg: number, dist: number): [number, number] {
+  const cornerR = halfWidthM * 0.35;
+
+  function offsetPt(lat: number, lon: number, brgDeg: number, dist: number): [number, number] {
+    if (dist === 0) return [lat, lon];
     const d = dist / R;
     const φ = lat * Math.PI / 180;
     const λ = lon * Math.PI / 180;
-    const θ = ((brg % 360) + 360) % 360 * Math.PI / 180;
+    const θ = ((brgDeg % 360) + 360) % 360 * Math.PI / 180;
     const φ2 = Math.asin(Math.sin(φ) * Math.cos(d) + Math.cos(φ) * Math.sin(d) * Math.cos(θ));
     const λ2 = λ + Math.atan2(Math.sin(θ) * Math.sin(d) * Math.cos(φ), Math.cos(d) - Math.sin(φ) * Math.sin(φ2));
     return [φ2 * 180 / Math.PI, λ2 * 180 / Math.PI];
   }
 
-  // Bearing from start to end
-  const φ1 = sLat * Math.PI / 180, φ2 = eLat * Math.PI / 180;
+  const φ1 = sLat * Math.PI / 180, φ2e = eLat * Math.PI / 180;
   const dλ = (eLon - sLon) * Math.PI / 180;
-  const y = Math.sin(dλ) * Math.cos(φ2);
-  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(dλ);
+  const y = Math.sin(dλ) * Math.cos(φ2e);
+  const x = Math.cos(φ1) * Math.sin(φ2e) - Math.sin(φ1) * Math.cos(φ2e) * Math.cos(dλ);
   const fwd = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  const back = (fwd + 180) % 360;
+
+  // Four arc-center points (inner corners of the rounded rect)
+  function arcCenter(lat: number, lon: number, axialBrg: number, lateralBrg: number): [number, number] {
+    const tmp = offsetPt(lat, lon, axialBrg, cornerR);
+    return offsetPt(tmp[0], tmp[1], lateralBrg, halfWidthM - cornerR);
+  }
+  const fc_r = arcCenter(eLat, eLon, back,   fwd + 90);
+  const bc_r = arcCenter(sLat, sLon, fwd,    fwd + 90);
+  const bc_l = arcCenter(sLat, sLon, fwd,    fwd - 90);
+  const fc_l = arcCenter(eLat, eLon, back,   fwd - 90);
 
   const pts: [number, number][] = [];
-  // End cap: sweep from fwd+90 to fwd+270 (through the far side)
-  for (let i = 0; i <= arcSteps; i++) {
-    pts.push(offsetPt(eLat, eLon, fwd + 90 + 180 * i / arcSteps, radiusM));
+  function addArc(ctr: [number, number], b0: number, b1: number) {
+    for (let i = 0; i <= arcSteps; i++) {
+      pts.push(offsetPt(ctr[0], ctr[1], b0 + (b1 - b0) * i / arcSteps, cornerR));
+    }
   }
-  // Start cap: sweep from fwd+270 to fwd+450 (= fwd+90, through the near side)
-  for (let i = 0; i <= arcSteps; i++) {
-    pts.push(offsetPt(sLat, sLon, fwd + 270 + 180 * i / arcSteps, radiusM));
-  }
+  // Clockwise perimeter: front-right → back-right → back-left → front-left
+  addArc(fc_r, fwd,       fwd + 90);
+  addArc(bc_r, fwd + 90,  fwd + 180);
+  addArc(bc_l, fwd + 180, fwd + 270);
+  addArc(fc_l, fwd + 270, fwd + 360);
   pts.push(pts[0]);
   return pts;
 }
@@ -100,7 +124,7 @@ export default function Compare() {
   const [loadingTracks, setLoadingTracks] = useState(false);
   const [thermals, setThermals] = useState<ThermalLight[]>([]);
   const [showThermals, setShowThermals] = useState(true);
-  const [thermalMode, setThermalMode] = useState<"circle" | "stadium">("circle");
+  const [thermalMode, setThermalMode] = useState<"circle" | "rounded">("circle");
   const [filterHour, setFilterHour] = useState<number | null>(null);
 
   useEffect(() => {
@@ -279,17 +303,22 @@ export default function Compare() {
             <h2>比較サマリー</h2>
             <div style={{ overflowX: "auto" }}>
               <CompareBarChart
-                data={selectedFlights.map((f) => ({
-                  label: `${f.pilot}/${f.aircraft}/${fmtDate(f.flight_date)}`,
-                  "平均上昇率(m/s)": f.avg_climb_in_thermals_ms ?? 0,
-                  "平均速度(km/h)": f.avg_ground_speed_kmh ?? 0,
-                  "最大L/D": f.best_glide_ratio ?? 0,
-                  "距離(km)": f.total_distance_km ?? 0,
-                }))}
+                data={selectedFlights.map((f) => {
+                  const hours = (f.duration_s ?? 0) / 3600;
+                  return {
+                    label: `${f.pilot}/${f.aircraft}/${fmtDate(f.flight_date)}`,
+                    "平均上昇率(m/s)": f.avg_climb_in_thermals_ms ?? 0,
+                    "平均速度(km/h)": f.avg_ground_speed_kmh ?? 0,
+                    "最大L/D": f.best_glide_ratio ?? 0,
+                    "距離(km)": f.total_distance_km ?? 0,
+                    "サーマル密度(件/h)": hours > 0 ? (f.thermal_count ?? 0) / hours : 0,
+                  };
+                })}
                 metrics={[
                   { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
                   { key: "最大L/D", label: "最大L/D", color: "#9a6700" },
                   { key: "距離(km)", label: "距離 (km)", color: "#1f6feb" },
+                  { key: "サーマル密度(件/h)", label: "サーマル密度 (件/h)", color: "#e07b00" },
                 ]}
               />
             </div>
@@ -324,11 +353,11 @@ export default function Compare() {
                       形状:{" "}
                       <select
                         value={thermalMode}
-                        onChange={(e) => setThermalMode(e.target.value as "circle" | "stadium")}
+                        onChange={(e) => setThermalMode(e.target.value as "circle" | "rounded")}
                         style={{ fontSize: "0.88rem" }}
                       >
                         <option value="circle">円</option>
-                        <option value="stadium">カプセル (開始→終了)</option>
+                        <option value="rounded">角丸長方形 (開始→終了)</option>
                       </select>
                     </span>
                     <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
@@ -388,7 +417,8 @@ export default function Compare() {
                       </Polyline>
                     ))}
                     {visibleThermals.map((t, i) => {
-                      const radius = Math.max(100, 200 * t.avg_climb_rate_ms);
+                      // Log scale: 60m at 0 m/s climb, ~215m at 5 m/s, ~255m at 10 m/s
+                      const radius = Math.max(60, 80 * Math.log1p(t.avg_climb_rate_ms * 2));
                       const style = {
                         color: "#c00",
                         fillColor: "#e33",
@@ -408,11 +438,11 @@ export default function Compare() {
                       );
 
                       if (
-                        thermalMode === "stadium" &&
+                        thermalMode === "rounded" &&
                         t.start_lat != null && t.start_lon != null &&
                         t.end_lat != null && t.end_lon != null
                       ) {
-                        const poly = capsulePolygon(
+                        const poly = roundedRectPolygon(
                           t.start_lat, t.start_lon,
                           t.end_lat, t.end_lon,
                           radius,

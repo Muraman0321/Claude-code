@@ -574,9 +574,15 @@ def _local_hour(thermal_start, longitude: float) -> int:
 @app.get("/api/thermals", response_model=list[ThermalLight])
 def flight_thermals(
     ids: str,
+    max_thermals: int = Query(default=1500, ge=100, le=5000),
     db: Session = Depends(get_db),
 ):
-    """Return thermal records for a set of flight IDs (used by compare-map overlay)."""
+    """Return thermal records for a set of flight IDs (used by compare-map overlay).
+
+    Capped at `max_thermals` total records; when over the limit, thermals are
+    sampled uniformly so each flight contributes proportionally.
+    """
+    import random
     flight_ids = [int(x) for x in ids.split(",") if x.strip().lstrip("-").isdigit()]
     if not flight_ids:
         return []
@@ -586,6 +592,8 @@ def flight_thermals(
         .filter(ThermalRecord.flight_id.in_(flight_ids))
         .all()
     )
+    if len(rows) > max_thermals:
+        rows = random.sample(rows, max_thermals)
     result: list[ThermalLight] = []
     for t, flight in rows:
         local_hour = _local_hour(t.start_time, flight.start_longitude or MENUMA_LON)
@@ -921,36 +929,42 @@ def flight_tracks(
 ):
     """Lightweight bulk endpoint: just downsampled lat/lon for many flights.
 
-    Used by the comparison page where rendering full ~3000-point tracks
-    for 100 flights would crush both the browser and the DB.
+    Points per flight are scaled down automatically when many flights are
+    requested so that total DB load and response size stay bounded.
+    Only lat/lon/seq columns are fetched to minimise object-creation overhead.
     """
     flight_ids = [int(x) for x in ids.split(",") if x.strip().lstrip("-").isdigit()]
     if not flight_ids:
         return []
 
+    # Adaptive points-per-flight: keep total ≤ ~1500 points
+    effective_max = max(15, min(max_points, 1500 // len(flight_ids)))
+
     flights = {
         f.id: f
         for f in db.query(Flight).filter(Flight.id.in_(flight_ids)).all()
     }
-    fixes = (
-        db.query(GpsFix)
+
+    # Select only the three columns we need — much faster than full ORM objects
+    rows = (
+        db.query(GpsFix.flight_id, GpsFix.seq, GpsFix.latitude, GpsFix.longitude)
         .filter(GpsFix.flight_id.in_(flight_ids))
         .order_by(GpsFix.flight_id, GpsFix.seq)
         .all()
     )
 
-    by_flight: dict[int, list[GpsFix]] = {}
-    for f in fixes:
-        by_flight.setdefault(f.flight_id, []).append(f)
+    by_flight: dict[int, list[tuple]] = {}
+    for row in rows:
+        by_flight.setdefault(row[0], []).append(row)
 
     out: list[FlightTrack] = []
     for fid in flight_ids:
         flight = flights.get(fid)
-        flight_fixes = by_flight.get(fid, [])
-        if not flight or not flight_fixes:
+        flight_rows = by_flight.get(fid, [])
+        if not flight or not flight_rows:
             continue
-        step = max(1, len(flight_fixes) // max_points)
-        points = [TrackPoint(lat=f.latitude, lon=f.longitude) for f in flight_fixes[::step]]
+        step = max(1, len(flight_rows) // effective_max)
+        points = [TrackPoint(lat=r[2], lon=r[3]) for r in flight_rows[::step]]
         out.append(FlightTrack(
             flight_id=fid,
             pilot=flight.pilot,
