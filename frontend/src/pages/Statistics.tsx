@@ -5,6 +5,7 @@ import type {
   AircraftStats,
   FlightSummary,
   PilotStats,
+  SeasonBucket,
   TimeOfDayBucket,
   WeatherBucket,
 } from "../types";
@@ -46,7 +47,9 @@ export default function Statistics() {
   const [flights, setFlights] = useState<FlightSummary[]>([]);
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDayBucket[]>([]);
   const [weather, setWeather] = useState<WeatherBucket[]>([]);
+  const [seasons, setSeasons] = useState<SeasonBucket[]>([]);
   const [selectedPilot, setSelectedPilot] = useState("");
+  const [selectedSeason, setSelectedSeason] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -65,8 +68,15 @@ export default function Statistics() {
   }, []);
 
   useEffect(() => {
-    api.timeOfDayStats({ pilot: selectedPilot || undefined }).then(setTimeOfDay).catch(console.error);
+    api.seasonStats({ pilot: selectedPilot || undefined }).then(setSeasons).catch(console.error);
   }, [selectedPilot]);
+
+  useEffect(() => {
+    api.timeOfDayStats({
+      pilot: selectedPilot || undefined,
+      season: selectedSeason || undefined,
+    }).then(setTimeOfDay).catch(console.error);
+  }, [selectedPilot, selectedSeason]);
 
   const filtered = selectedPilot ? flights.filter((f) => f.pilot === selectedPilot) : flights;
   const monthData = bucketByMonth(filtered);
@@ -157,13 +167,81 @@ export default function Statistics() {
       </div>
 
       <div className="card">
+        <h2>季節別サマリー</h2>
+        <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
+          気象暦に基づき 春 (3-5月) / 夏 (6-8月) / 秋 (9-11月) / 冬 (12-2月) で集計。
+        </p>
+        {seasons.length === 0 ? (
+          <div className="empty">フライトがありません</div>
+        ) : (
+          <>
+            <table>
+              <thead>
+                <tr>
+                  <th>季節</th>
+                  <th>フライト</th>
+                  <th>総時間</th>
+                  <th>総距離</th>
+                  <th>平均上昇率</th>
+                  <th>平均速度</th>
+                  <th>平均最高高度</th>
+                  <th>平均L/D</th>
+                  <th>平均気温</th>
+                  <th>平均風速</th>
+                </tr>
+              </thead>
+              <tbody>
+                {seasons.map((s) => (
+                  <tr key={s.season_key}>
+                    <td><strong>{s.season}</strong></td>
+                    <td>{s.flight_count}</td>
+                    <td>{s.total_hours.toFixed(1)} h</td>
+                    <td>{s.total_distance_km.toFixed(0)} km</td>
+                    <td>{fmtNum(s.avg_climb_in_thermals_ms, 2, "m/s")}</td>
+                    <td>{fmtNum(s.avg_ground_speed_kmh, 1, "km/h")}</td>
+                    <td>{fmtNum(s.avg_max_altitude_m, 0, "m")}</td>
+                    <td>{fmtNum(s.avg_best_glide, 1)}</td>
+                    <td>{fmtNum(s.avg_temp_c, 1, "°C")}</td>
+                    <td>{fmtNum(s.avg_wind_speed_kmh, 1, "km/h")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ marginTop: "1rem" }}>
+              <CompareBarChart
+                data={seasons.map((s) => ({
+                  label: s.season,
+                  "平均上昇率(m/s)": s.avg_climb_in_thermals_ms ?? 0,
+                  "平均速度(km/h)": s.avg_ground_speed_kmh ?? 0,
+                  "平均L/D": s.avg_best_glide ?? 0,
+                }))}
+                metrics={[
+                  { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
+                  { key: "平均L/D", label: "平均L/D", color: "#9a6700" },
+                ]}
+              />
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="card">
         <h2>時間帯別サーマル強度 (現地時刻)</h2>
         <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
           検出されたサーマルを開始時刻（経度から推定した現地時刻）でバケット化したもの。
-          {selectedPilot && <> 選手フィルタ: <strong>{selectedPilot}</strong></>}
         </p>
+        <div className="filters">
+          <select value={selectedSeason} onChange={(e) => setSelectedSeason(e.target.value)}>
+            <option value="">全季節</option>
+            <option value="spring">春 (3-5月)</option>
+            <option value="summer">夏 (6-8月)</option>
+            <option value="autumn">秋 (9-11月)</option>
+            <option value="winter">冬 (12-2月)</option>
+          </select>
+          {selectedPilot && <span style={{ alignSelf: "center", fontSize: "0.85rem" }}>選手: <strong>{selectedPilot}</strong></span>}
+        </div>
         {timeOfDay.length === 0 ? (
-          <div className="empty">サーマルデータがありません</div>
+          <div className="empty">該当するサーマルデータがありません</div>
         ) : (
           <CompareBarChart
             data={hourData}

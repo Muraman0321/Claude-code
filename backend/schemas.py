@@ -106,3 +106,17 @@ class WeatherBucket(BaseModel):
     avg_climb_rate_ms: float | None
     avg_ground_speed_kmh: float | None
     avg_best_glide: float | None
+
+
+class SeasonBucket(BaseModel):
+    season: str  # "春" / "夏" / "秋" / "冬"
+    season_key: str  # "spring" / "summer" / "autumn" / "winter" (stable for FE keys)
+    flight_count: int
+    total_hours: float
+    total_distance_km: float
+    avg_climb_in_thermals_ms: float | None
+    avg_ground_speed_kmh: float | None
+    avg_max_altitude_m: float | None
+    avg_best_glide: float | None
+    avg_temp_c: float | None
+    avg_wind_speed_kmh: float | None

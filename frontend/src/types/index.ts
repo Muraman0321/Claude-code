@@ -96,3 +96,17 @@ export interface WeatherBucket {
   avg_ground_speed_kmh: number | null;
   avg_best_glide: number | null;
 }
+
+export interface SeasonBucket {
+  season: string; // 春/夏/秋/冬
+  season_key: "spring" | "summer" | "autumn" | "winter";
+  flight_count: number;
+  total_hours: number;
+  total_distance_km: number;
+  avg_climb_in_thermals_ms: number | null;
+  avg_ground_speed_kmh: number | null;
+  avg_max_altitude_m: number | null;
+  avg_best_glide: number | null;
+  avg_temp_c: number | null;
+  avg_wind_speed_kmh: number | null;
+}

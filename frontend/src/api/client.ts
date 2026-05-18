@@ -3,6 +3,7 @@ import type {
   FlightDetail,
   FlightSummary,
   PilotStats,
+  SeasonBucket,
   TimeOfDayBucket,
   UploadResult,
   WeatherBucket,
@@ -44,13 +45,19 @@ export const api = {
   listAircraft: () => get<string[]>("/aircraft"),
   pilotStats: () => get<PilotStats[]>("/stats/pilots"),
   aircraftStats: () => get<AircraftStats[]>("/stats/aircraft"),
-  timeOfDayStats: (params: { pilot?: string; aircraft?: string } = {}) => {
+  timeOfDayStats: (params: { pilot?: string; aircraft?: string; season?: string } = {}) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
     const q = qs.toString();
     return get<TimeOfDayBucket[]>(`/stats/time-of-day${q ? `?${q}` : ""}`);
   },
   weatherStats: () => get<WeatherBucket[]>("/stats/weather"),
+  seasonStats: (params: { pilot?: string; aircraft?: string } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+    const q = qs.toString();
+    return get<SeasonBucket[]>(`/stats/season${q ? `?${q}` : ""}`);
+  },
 
   async refreshWeather(id: number): Promise<FlightSummary> {
     const res = await fetch(`${BASE}/flights/${id}/refresh-weather`, { method: "POST" });

@@ -25,6 +25,7 @@ from schemas import (
     FlightDetailOut,
     FlightSummaryOut,
     PilotStats,
+    SeasonBucket,
     ThermalOut,
     TimeOfDayBucket,
     UploadResultOut,
@@ -283,10 +284,30 @@ def stats_aircraft(db: Session = Depends(get_db)):
     ]
 
 
+_SEASONS = [
+    ("春", "spring", {3, 4, 5}),
+    ("夏", "summer", {6, 7, 8}),
+    ("秋", "autumn", {9, 10, 11}),
+    ("冬", "winter", {12, 1, 2}),
+]
+
+
+def _season_of(month: int) -> tuple[str, str]:
+    for label, key, months in _SEASONS:
+        if month in months:
+            return label, key
+    return "冬", "winter"  # unreachable
+
+
+def _avg(vals: list[float]) -> float | None:
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
 @app.get("/api/stats/time-of-day", response_model=list[TimeOfDayBucket])
 def stats_time_of_day(
     pilot: str | None = None,
     aircraft: str | None = None,
+    season: str | None = None,  # spring/summer/autumn/winter
     db: Session = Depends(get_db),
 ):
     """Aggregate detected thermals by local hour of day.
@@ -304,8 +325,13 @@ def stats_time_of_day(
     if aircraft:
         q = q.filter(Flight.aircraft == aircraft)
 
+    season_filter = season.lower() if season else None
     buckets: dict[int, list[ThermalRecord]] = {}
     for thermal, flight in q.all():
+        if season_filter:
+            _, key = _season_of(flight.flight_date.month)
+            if key != season_filter:
+                continue
         offset = round((flight.start_longitude or 0) / 15.0)
         local_hour = (thermal.start_time.hour + offset) % 24
         buckets.setdefault(local_hour, []).append(thermal)
@@ -323,6 +349,46 @@ def stats_time_of_day(
     return out
 
 
+@app.get("/api/stats/season", response_model=list[SeasonBucket])
+def stats_season(
+    pilot: str | None = None,
+    aircraft: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Aggregate flights by meteorological season (spring/summer/autumn/winter)."""
+    q = db.query(Flight)
+    if pilot:
+        q = q.filter(Flight.pilot == pilot)
+    if aircraft:
+        q = q.filter(Flight.aircraft == aircraft)
+
+    grouped: dict[str, list[Flight]] = {key: [] for _, key, _ in _SEASONS}
+    label_for: dict[str, str] = {key: label for label, key, _ in _SEASONS}
+    for flight in q.all():
+        _, key = _season_of(flight.flight_date.month)
+        grouped[key].append(flight)
+
+    out: list[SeasonBucket] = []
+    for _, key, _ in _SEASONS:
+        fs = grouped[key]
+        if not fs:
+            continue
+        out.append(SeasonBucket(
+            season=label_for[key],
+            season_key=key,
+            flight_count=len(fs),
+            total_hours=round(sum(f.duration_s or 0 for f in fs) / 3600.0, 2),
+            total_distance_km=round(sum(f.total_distance_km or 0 for f in fs), 1),
+            avg_climb_in_thermals_ms=_avg([f.avg_climb_in_thermals_ms for f in fs if f.avg_climb_in_thermals_ms is not None]),
+            avg_ground_speed_kmh=_avg([f.avg_ground_speed_kmh for f in fs if f.avg_ground_speed_kmh is not None]),
+            avg_max_altitude_m=_avg([float(f.max_altitude_m) for f in fs if f.max_altitude_m is not None]),
+            avg_best_glide=_avg([f.best_glide_ratio for f in fs if f.best_glide_ratio is not None]),
+            avg_temp_c=_avg([f.weather_temp_c for f in fs if f.weather_temp_c is not None]),
+            avg_wind_speed_kmh=_avg([f.weather_wind_speed_kmh for f in fs if f.weather_wind_speed_kmh is not None]),
+        ))
+    return out
+
+
 _WIND_BUCKETS = [
     ("0-5 km/h", 0, 5),
     ("5-10 km/h", 5, 10),
@@ -330,10 +396,6 @@ _WIND_BUCKETS = [
     ("15-20 km/h", 15, 20),
     ("20+ km/h", 20, 999),
 ]
-
-
-def _avg(vals: list[float]) -> float | None:
-    return round(sum(vals) / len(vals), 2) if vals else None
 
 
 @app.get("/api/stats/weather", response_model=list[WeatherBucket])
