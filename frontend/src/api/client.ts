@@ -1,7 +1,9 @@
 import type {
   AircraftStats,
+  AreaStats,
   FlightDetail,
   FlightSummary,
+  FlightTrack,
   PilotStats,
   SeasonBucket,
   TimeOfDayBucket,
@@ -57,6 +59,21 @@ export const api = {
     for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
     const q = qs.toString();
     return get<SeasonBucket[]>(`/stats/season${q ? `?${q}` : ""}`);
+  },
+  areaSectors: (params: { center_lat?: number; center_lon?: number; radius_km?: number } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v != null) qs.set(k, String(v));
+    const q = qs.toString();
+    return get<AreaStats>(`/stats/area/sectors${q ? `?${q}` : ""}`);
+  },
+  areaGrid: (params: { center_lat?: number; center_lon?: number; cell_km?: number } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v != null) qs.set(k, String(v));
+    const q = qs.toString();
+    return get<AreaStats>(`/stats/area/grid${q ? `?${q}` : ""}`);
+  },
+  tracks: (ids: number[], maxPoints = 120) => {
+    return get<FlightTrack[]>(`/tracks?ids=${ids.join(",")}&max_points=${maxPoints}`);
   },
 
   async refreshWeather(id: number): Promise<FlightSummary> {

@@ -31,6 +31,68 @@ def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
 
 
+def offset_point(lat: float, lon: float, bearing_deg_val: float, distance_m: float) -> tuple[float, float]:
+    """Compute the destination point given a start, a bearing, and a distance."""
+    br = math.radians(bearing_deg_val)
+    lat1 = math.radians(lat)
+    lon1 = math.radians(lon)
+    ang_dist = distance_m / EARTH_RADIUS_M
+    lat2 = math.asin(
+        math.sin(lat1) * math.cos(ang_dist)
+        + math.cos(lat1) * math.sin(ang_dist) * math.cos(br)
+    )
+    lon2 = lon1 + math.atan2(
+        math.sin(br) * math.sin(ang_dist) * math.cos(lat1),
+        math.cos(ang_dist) - math.sin(lat1) * math.sin(lat2),
+    )
+    return math.degrees(lat2), math.degrees(lon2)
+
+
+def offset_point_km(lat: float, lon: float, east_km: float, north_km: float) -> tuple[float, float]:
+    """Approximate offset by east/north km (good enough at glider scales)."""
+    new_lat = lat + (north_km / 111.0)
+    new_lon = lon + (east_km / (111.0 * math.cos(math.radians(lat)) or 1e-9))
+    return new_lat, new_lon
+
+
+def sector_polygon(
+    center_lat: float, center_lon: float, radius_km: float,
+    bearing_from: float, bearing_to: float, arc_steps: int = 24,
+) -> list[tuple[float, float]]:
+    """Build a closed wedge polygon for rendering on a map."""
+    pts: list[tuple[float, float]] = [(center_lat, center_lon)]
+    for i in range(arc_steps + 1):
+        b = bearing_from + (bearing_to - bearing_from) * i / arc_steps
+        pts.append(offset_point(center_lat, center_lon, b, radius_km * 1000))
+    pts.append((center_lat, center_lon))
+    return pts
+
+
+def grid_cell_polygon(
+    center_lat: float, center_lon: float,
+    dx_cells: int, dy_cells: int, cell_km: float,
+) -> list[tuple[float, float]]:
+    """Closed rectangle polygon for a 3x3 grid cell (dx/dy in {-1,0,1})."""
+    cell_lat, cell_lon = offset_point_km(
+        center_lat, center_lon, dx_cells * cell_km, dy_cells * cell_km,
+    )
+    half = cell_km / 2.0
+    corners = [
+        offset_point_km(cell_lat, cell_lon, -half, -half),
+        offset_point_km(cell_lat, cell_lon, +half, -half),
+        offset_point_km(cell_lat, cell_lon, +half, +half),
+        offset_point_km(cell_lat, cell_lon, -half, +half),
+    ]
+    return corners + [corners[0]]
+
+
+GRID_LABELS = {
+    (-1, 1): "NW", (0, 1): "N", (1, 1): "NE",
+    (-1, 0): "W", (0, 0): "C", (1, 0): "E",
+    (-1, -1): "SW", (0, -1): "S", (1, -1): "SE",
+}
+
+
 @dataclass
 class FixMetrics:
     timestamp: str  # ISO 8601

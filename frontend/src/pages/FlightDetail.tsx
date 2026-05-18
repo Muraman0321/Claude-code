@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { AltitudeChart, ClimbHistogram, ClimbRateChart, SpeedChart } from "../components/Charts";
@@ -21,11 +21,62 @@ export default function FlightDetailPage() {
   const [colorBy, setColorBy] = useState<"altitude" | "climb" | "speed">("altitude");
   const [wxBusy, setWxBusy] = useState(false);
   const [wxError, setWxError] = useState<string | null>(null);
+  const [scrubIdx, setScrubIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [playSpeed, setPlaySpeed] = useState(30); // 30x realtime
+  const playRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!id) return;
-    api.getFlight(Number(id)).then(setFlight).catch(console.error);
+    api.getFlight(Number(id)).then((f) => {
+      setFlight(f);
+      setScrubIdx(0);
+    }).catch(console.error);
   }, [id]);
+
+  useEffect(() => {
+    if (!playing || !flight) return;
+    // ~10 fps, advance scrubIdx by `playSpeed * 0.1` seconds of real time per frame.
+    const fixesCount = flight.fixes.length;
+    const startMs = new Date(flight.fixes[0].timestamp).getTime();
+    const intervalMs = 100;
+    playRef.current = window.setInterval(() => {
+      setScrubIdx((idx) => {
+        if (idx >= fixesCount - 1) {
+          setPlaying(false);
+          return idx;
+        }
+        const curMs = new Date(flight.fixes[idx].timestamp).getTime();
+        const targetMs = curMs + playSpeed * intervalMs;
+        let next = idx + 1;
+        while (next < fixesCount && new Date(flight.fixes[next].timestamp).getTime() < targetMs) {
+          next++;
+        }
+        if (next >= fixesCount) {
+          setPlaying(false);
+          return fixesCount - 1;
+        }
+        return next;
+      });
+    }, intervalMs);
+    return () => {
+      if (playRef.current) window.clearInterval(playRef.current);
+    };
+  }, [playing, flight, playSpeed]);
+
+  const currentFix = useMemo(() => flight?.fixes[scrubIdx] ?? null, [flight, scrubIdx]);
+  const activeThermal = useMemo(() => {
+    if (!flight || !currentFix) return null;
+    const t = new Date(currentFix.timestamp).getTime();
+    return flight.thermals.find(
+      (th) => new Date(th.start_time).getTime() <= t && new Date(th.end_time).getTime() >= t,
+    ) ?? null;
+  }, [flight, currentFix]);
+
+  const elapsedSec = useMemo(() => {
+    if (!flight || !currentFix) return 0;
+    return (new Date(currentFix.timestamp).getTime() - new Date(flight.fixes[0].timestamp).getTime()) / 1000;
+  }, [flight, currentFix]);
 
   async function refreshWeather() {
     if (!flight) return;
@@ -157,16 +208,85 @@ export default function FlightDetailPage() {
       </div>
 
       <div className="card">
-        <h2>フライトマップ</h2>
-        <div style={{ marginBottom: "0.5rem" }}>
-          色分け:{" "}
-          <select value={colorBy} onChange={(e) => setColorBy(e.target.value as "altitude" | "climb" | "speed")}>
-            <option value="altitude">高度</option>
-            <option value="climb">上昇率</option>
-            <option value="speed">対地速度</option>
-          </select>
+        <h2>フライトマップ（時間スクラブ対応）</h2>
+        <div style={{ marginBottom: "0.5rem", display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+          <span>
+            色分け:{" "}
+            <select value={colorBy} onChange={(e) => setColorBy(e.target.value as "altitude" | "climb" | "speed")}>
+              <option value="altitude">高度</option>
+              <option value="climb">上昇率</option>
+              <option value="speed">対地速度</option>
+            </select>
+          </span>
+          <span>
+            <button
+              onClick={() => setPlaying((p) => !p)}
+              style={{ padding: "0.3rem 0.8rem" }}
+            >
+              {playing ? "⏸ 停止" : "▶ 再生"}
+            </button>
+          </span>
+          <span>
+            速度:{" "}
+            <select value={playSpeed} onChange={(e) => setPlaySpeed(Number(e.target.value))}>
+              <option value={10}>×10</option>
+              <option value={30}>×30</option>
+              <option value={60}>×60</option>
+              <option value={120}>×120</option>
+              <option value={300}>×300</option>
+            </select>
+          </span>
+          <span style={{ marginLeft: "auto", fontSize: "0.9rem", color: "#57606a" }}>
+            {currentFix && (
+              <>
+                {currentFix.timestamp.slice(11, 19)} (経過 {Math.floor(elapsedSec / 60)}分{Math.floor(elapsedSec % 60)}秒)
+              </>
+            )}
+          </span>
         </div>
-        <FlightMap fixes={flight.fixes} thermals={flight.thermals} colorBy={colorBy} />
+
+        <FlightMap fixes={flight.fixes} thermals={flight.thermals} colorBy={colorBy} currentIdx={scrubIdx} />
+
+        <div style={{ marginTop: "0.75rem" }}>
+          <input
+            type="range"
+            min={0}
+            max={flight.fixes.length - 1}
+            value={scrubIdx}
+            onChange={(e) => {
+              setScrubIdx(Number(e.target.value));
+              setPlaying(false);
+            }}
+            style={{ width: "100%" }}
+          />
+        </div>
+
+        {currentFix && (
+          <div className="metric-grid" style={{ marginTop: "0.5rem" }}>
+            <div className="metric">
+              <div className="metric-label">現在高度</div>
+              <div className="metric-value">{currentFix.altitude_m} m</div>
+            </div>
+            <div className="metric">
+              <div className="metric-label">上昇率</div>
+              <div className="metric-value" style={{ color: (currentFix.climb_rate_ms ?? 0) > 0.3 ? "#1a7f37" : (currentFix.climb_rate_ms ?? 0) < -0.5 ? "#cf222e" : undefined }}>
+                {fmtNum(currentFix.climb_rate_ms, 2, "m/s")}
+              </div>
+            </div>
+            <div className="metric">
+              <div className="metric-label">対地速度</div>
+              <div className="metric-value">{fmtNum(currentFix.ground_speed_kmh, 0, "km/h")}</div>
+            </div>
+            <div className="metric">
+              <div className="metric-label">サーマル中</div>
+              <div className="metric-value" style={{ fontSize: "0.95rem", color: activeThermal ? "#9a6700" : "#57606a" }}>
+                {activeThermal
+                  ? `#${flight.thermals.indexOf(activeThermal) + 1} (${activeThermal.avg_climb_rate_ms.toFixed(2)} m/s)`
+                  : "—"}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="row">

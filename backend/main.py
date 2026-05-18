@@ -21,13 +21,18 @@ from filename_parser import parse_filename
 from models import Flight, GpsFix, ThermalRecord
 from schemas import (
     AircraftStats,
+    AreaBlock,
+    AreaStats,
     FixOut,
     FlightDetailOut,
     FlightSummaryOut,
+    FlightTrack,
+    HourCell,
     PilotStats,
     SeasonBucket,
     ThermalOut,
     TimeOfDayBucket,
+    TrackPoint,
     UploadResultOut,
     WeatherBucket,
 )
@@ -446,6 +451,195 @@ def refresh_weather(flight_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(flight)
     return flight
+
+
+MENUMA_LAT = 36.180
+MENUMA_LON = 139.387
+
+
+def _hour_cells(climbs_by_hour: dict[int, list[float]]) -> list[HourCell]:
+    return [
+        HourCell(
+            hour=h,
+            thermal_count=len(climbs_by_hour[h]),
+            avg_climb_rate_ms=round(sum(climbs_by_hour[h]) / len(climbs_by_hour[h]), 2),
+        )
+        for h in sorted(climbs_by_hour)
+    ]
+
+
+def _block_stats(records: list, by_hour: dict[int, list[float]]) -> dict:
+    climbs = [r.avg_climb_rate_ms for r in records]
+    gains = [r.altitude_gain_m for r in records]
+    return {
+        "thermal_count": len(records),
+        "avg_climb_rate_ms": round(sum(climbs) / len(climbs), 2) if climbs else None,
+        "max_climb_rate_ms": round(max(climbs), 2) if climbs else None,
+        "avg_altitude_gain_m": round(sum(gains) / len(gains), 1) if gains else None,
+        "by_hour": _hour_cells(by_hour),
+    }
+
+
+def _local_hour(thermal_start, longitude: float) -> int:
+    offset = round((longitude or 0) / 15.0)
+    return (thermal_start.hour + offset) % 24
+
+
+@app.get("/api/stats/area/sectors", response_model=AreaStats)
+def stats_area_sectors(
+    center_lat: float = MENUMA_LAT,
+    center_lon: float = MENUMA_LON,
+    radius_km: float = 9.0,
+    db: Session = Depends(get_db),
+):
+    """Divide a circle around the center into 9 wedges of 40° each.
+
+    For each wedge, report thermal stats (count, avg/max climb rate,
+    avg altitude gain) and an hour-of-day breakdown of average climb.
+    """
+    rows = (
+        db.query(ThermalRecord, Flight)
+        .join(Flight, ThermalRecord.flight_id == Flight.id)
+        .all()
+    )
+
+    grouped: list[list[ThermalRecord]] = [[] for _ in range(9)]
+    by_hour_per_sector: list[dict[int, list[float]]] = [{} for _ in range(9)]
+    for t, flight in rows:
+        dist_m = analysis.haversine_m(center_lat, center_lon, t.center_lat, t.center_lon)
+        if dist_m > radius_km * 1000:
+            continue
+        b = analysis.bearing_deg(center_lat, center_lon, t.center_lat, t.center_lon)
+        idx = int(b // 40) % 9
+        grouped[idx].append(t)
+        hour = _local_hour(t.start_time, flight.start_longitude or center_lon)
+        by_hour_per_sector[idx].setdefault(hour, []).append(t.avg_climb_rate_ms)
+
+    blocks: list[AreaBlock] = []
+    for i in range(9):
+        bf = i * 40.0
+        bt = (i + 1) * 40.0
+        polygon = analysis.sector_polygon(center_lat, center_lon, radius_km, bf, bt)
+        stats = _block_stats(grouped[i], by_hour_per_sector[i])
+        blocks.append(AreaBlock(
+            id=f"sector_{i}",
+            label=f"S{i+1} ({int(bf)}°–{int(bt)}°)",
+            bearing_from=bf,
+            bearing_to=bt,
+            geometry=polygon,
+            **stats,
+        ))
+    return AreaStats(
+        kind="sectors",
+        center_lat=center_lat,
+        center_lon=center_lon,
+        radius_km=radius_km,
+        blocks=blocks,
+    )
+
+
+@app.get("/api/stats/area/grid", response_model=AreaStats)
+def stats_area_grid(
+    center_lat: float = MENUMA_LAT,
+    center_lon: float = MENUMA_LON,
+    cell_km: float = 6.0,
+    db: Session = Depends(get_db),
+):
+    """3x3 grid centered on (lat, lon) with each cell `cell_km` square."""
+    import math as _math
+    rows = (
+        db.query(ThermalRecord, Flight)
+        .join(Flight, ThermalRecord.flight_id == Flight.id)
+        .all()
+    )
+
+    cells: dict[tuple[int, int], list[ThermalRecord]] = {(x, y): [] for x in (-1, 0, 1) for y in (-1, 0, 1)}
+    by_hour: dict[tuple[int, int], dict[int, list[float]]] = {k: {} for k in cells}
+
+    lat_per_km = 1.0 / 111.0
+    lon_per_km = 1.0 / (111.0 * _math.cos(_math.radians(center_lat)) or 1e-9)
+    extent_lat = cell_km * lat_per_km
+    extent_lon = cell_km * lon_per_km
+
+    for t, flight in rows:
+        d_lat = t.center_lat - center_lat
+        d_lon = t.center_lon - center_lon
+        # Snap to one of {-1, 0, 1} per axis if within ±1.5 cells.
+        ratio_y = d_lat / extent_lat
+        ratio_x = d_lon / extent_lon
+        if abs(ratio_x) > 1.5 or abs(ratio_y) > 1.5:
+            continue
+        ix = max(-1, min(1, round(ratio_x)))
+        iy = max(-1, min(1, round(ratio_y)))
+        cells[(ix, iy)].append(t)
+        hour = _local_hour(t.start_time, flight.start_longitude or center_lon)
+        by_hour[(ix, iy)].setdefault(hour, []).append(t.avg_climb_rate_ms)
+
+    blocks: list[AreaBlock] = []
+    for (dx, dy), records in cells.items():
+        polygon = analysis.grid_cell_polygon(center_lat, center_lon, dx, dy, cell_km)
+        stats = _block_stats(records, by_hour[(dx, dy)])
+        label = analysis.GRID_LABELS[(dx, dy)]
+        blocks.append(AreaBlock(
+            id=f"cell_{label}",
+            label=label,
+            geometry=polygon,
+            **stats,
+        ))
+    return AreaStats(
+        kind="grid",
+        center_lat=center_lat,
+        center_lon=center_lon,
+        cell_km=cell_km,
+        blocks=blocks,
+    )
+
+
+@app.get("/api/tracks", response_model=list[FlightTrack])
+def flight_tracks(
+    ids: str,
+    max_points: int = 120,
+    db: Session = Depends(get_db),
+):
+    """Lightweight bulk endpoint: just downsampled lat/lon for many flights.
+
+    Used by the comparison page where rendering full ~3000-point tracks
+    for 100 flights would crush both the browser and the DB.
+    """
+    flight_ids = [int(x) for x in ids.split(",") if x.strip().lstrip("-").isdigit()]
+    if not flight_ids:
+        return []
+
+    flights = {
+        f.id: f
+        for f in db.query(Flight).filter(Flight.id.in_(flight_ids)).all()
+    }
+    fixes = (
+        db.query(GpsFix)
+        .filter(GpsFix.flight_id.in_(flight_ids))
+        .order_by(GpsFix.flight_id, GpsFix.seq)
+        .all()
+    )
+
+    by_flight: dict[int, list[GpsFix]] = {}
+    for f in fixes:
+        by_flight.setdefault(f.flight_id, []).append(f)
+
+    out: list[FlightTrack] = []
+    for fid in flight_ids:
+        flight = flights.get(fid)
+        flight_fixes = by_flight.get(fid, [])
+        if not flight or not flight_fixes:
+            continue
+        step = max(1, len(flight_fixes) // max_points)
+        points = [TrackPoint(lat=f.latitude, lon=f.longitude) for f in flight_fixes[::step]]
+        out.append(FlightTrack(
+            flight_id=fid,
+            pilot=flight.pilot,
+            aircraft=flight.aircraft,
+            points=points,
+        ))
+    return out
 
 
 @app.get("/api/health")

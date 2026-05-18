@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes } from "react-router-dom";
+import Area from "./pages/Area";
 import Compare from "./pages/Compare";
 import Dashboard from "./pages/Dashboard";
 import FlightDetail from "./pages/FlightDetail";
@@ -12,6 +13,7 @@ export default function App() {
         <NavLink to="/" end>ダッシュボード</NavLink>
         <NavLink to="/compare">比較</NavLink>
         <NavLink to="/statistics">統計</NavLink>
+        <NavLink to="/area">エリア分析</NavLink>
       </nav>
       <main>
         <Routes>
@@ -19,6 +21,7 @@ export default function App() {
           <Route path="/flights/:id" element={<FlightDetail />} />
           <Route path="/compare" element={<Compare />} />
           <Route path="/statistics" element={<Statistics />} />
+          <Route path="/area" element={<Area />} />
         </Routes>
       </main>
     </div>

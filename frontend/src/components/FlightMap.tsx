@@ -6,6 +6,7 @@ interface Props {
   fixes: Fix[];
   thermals: Thermal[];
   colorBy?: "altitude" | "climb" | "speed";
+  currentIdx?: number | null;  // when set, show a position marker + highlight active thermal
 }
 
 function colorScale(value: number, min: number, max: number): string {
@@ -18,7 +19,7 @@ function colorScale(value: number, min: number, max: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
-export function FlightMap({ fixes, thermals, colorBy = "altitude" }: Props) {
+export function FlightMap({ fixes, thermals, colorBy = "altitude", currentIdx = null }: Props) {
   const center = useMemo<[number, number]>(() => {
     if (fixes.length === 0) return [35.681, 139.767];
     const lat = fixes.reduce((s, f) => s + f.latitude, 0) / fixes.length;
@@ -65,26 +66,50 @@ export function FlightMap({ fixes, thermals, colorBy = "altitude" }: Props) {
         {segments.map((s, i) => (
           <Polyline key={i} positions={s.positions} pathOptions={{ color: s.color, weight: 3 }} />
         ))}
-        {thermals.map((t, i) => (
+        {thermals.map((t, i) => {
+          const active =
+            currentIdx != null && fixes[currentIdx]
+              ? new Date(t.start_time).getTime() <= new Date(fixes[currentIdx].timestamp).getTime() &&
+                new Date(t.end_time).getTime() >= new Date(fixes[currentIdx].timestamp).getTime()
+              : false;
+          return (
+            <CircleMarker
+              key={i}
+              center={[t.center_lat, t.center_lon]}
+              radius={Math.min(15, 4 + t.avg_climb_rate_ms * 3)}
+              pathOptions={{
+                color: active ? "#fbbc04" : "#cf222e",
+                fillColor: active ? "#ffd966" : "#ffcccb",
+                fillOpacity: active ? 0.9 : 0.7,
+                weight: active ? 3 : 1,
+              }}
+            >
+              <Tooltip>
+                <div>
+                  <strong>サーマル #{i + 1}{active && " ⟵ 現在地点"}</strong>
+                  <br />
+                  上昇率: {t.avg_climb_rate_ms.toFixed(2)} m/s
+                  <br />
+                  高度獲得: {t.altitude_gain_m.toFixed(0)} m
+                  <br />
+                  時間: {(t.duration_s / 60).toFixed(1)} 分
+                </div>
+              </Tooltip>
+            </CircleMarker>
+          );
+        })}
+        {currentIdx != null && fixes[currentIdx] && (
           <CircleMarker
-            key={i}
-            center={[t.center_lat, t.center_lon]}
-            radius={Math.min(15, 4 + t.avg_climb_rate_ms * 3)}
-            pathOptions={{ color: "#cf222e", fillColor: "#ffcccb", fillOpacity: 0.7 }}
+            center={[fixes[currentIdx].latitude, fixes[currentIdx].longitude]}
+            radius={9}
+            pathOptions={{ color: "#0d6efd", fillColor: "#1f6feb", fillOpacity: 1, weight: 3 }}
           >
-            <Tooltip>
-              <div>
-                <strong>サーマル #{i + 1}</strong>
-                <br />
-                上昇率: {t.avg_climb_rate_ms.toFixed(2)} m/s
-                <br />
-                高度獲得: {t.altitude_gain_m.toFixed(0)} m
-                <br />
-                時間: {(t.duration_s / 60).toFixed(1)} 分
-              </div>
+            <Tooltip permanent direction="top" offset={[0, -8]}>
+              {fixes[currentIdx].timestamp.slice(11, 19)} —{" "}
+              {fixes[currentIdx].altitude_m}m
             </Tooltip>
           </CircleMarker>
-        ))}
+        )}
       </MapContainer>
     </div>
   );

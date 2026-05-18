@@ -97,6 +97,46 @@ export interface WeatherBucket {
   avg_best_glide: number | null;
 }
 
+export interface HourCell {
+  hour: number;
+  thermal_count: number;
+  avg_climb_rate_ms: number;
+}
+
+export interface AreaBlock {
+  id: string;
+  label: string;
+  bearing_from: number | null;
+  bearing_to: number | null;
+  geometry: [number, number][]; // closed ring of [lat, lon]
+  thermal_count: number;
+  avg_climb_rate_ms: number | null;
+  max_climb_rate_ms: number | null;
+  avg_altitude_gain_m: number | null;
+  by_hour: HourCell[];
+}
+
+export interface AreaStats {
+  kind: "sectors" | "grid";
+  center_lat: number;
+  center_lon: number;
+  radius_km: number | null;
+  cell_km: number | null;
+  blocks: AreaBlock[];
+}
+
+export interface TrackPoint {
+  lat: number;
+  lon: number;
+}
+
+export interface FlightTrack {
+  flight_id: number;
+  pilot: string;
+  aircraft: string;
+  points: TrackPoint[];
+}
+
 export interface SeasonBucket {
   season: string; // 春/夏/秋/冬
   season_key: "spring" | "summer" | "autumn" | "winter";

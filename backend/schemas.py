@@ -120,3 +120,43 @@ class SeasonBucket(BaseModel):
     avg_best_glide: float | None
     avg_temp_c: float | None
     avg_wind_speed_kmh: float | None
+
+
+class HourCell(BaseModel):
+    hour: int  # 0-23 local
+    thermal_count: int
+    avg_climb_rate_ms: float
+
+
+class AreaBlock(BaseModel):
+    id: str  # e.g. "sector_0", "cell_NE"
+    label: str  # display label
+    bearing_from: float | None = None  # only for sectors
+    bearing_to: float | None = None
+    geometry: list[tuple[float, float]]  # closed [lat, lon] ring
+    thermal_count: int
+    avg_climb_rate_ms: float | None
+    max_climb_rate_ms: float | None
+    avg_altitude_gain_m: float | None
+    by_hour: list[HourCell]
+
+
+class AreaStats(BaseModel):
+    kind: str  # "sectors" / "grid"
+    center_lat: float
+    center_lon: float
+    radius_km: float | None = None  # sectors
+    cell_km: float | None = None  # grid
+    blocks: list[AreaBlock]
+
+
+class TrackPoint(BaseModel):
+    lat: float
+    lon: float
+
+
+class FlightTrack(BaseModel):
+    flight_id: int
+    pilot: str
+    aircraft: str
+    points: list[TrackPoint]
