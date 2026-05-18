@@ -21,6 +21,8 @@ frontend/  # React + TypeScript + Vite + Leaflet + Recharts
 
 ## セットアップ
 
+> **iPadから使いたい方は [DEPLOY_iPad.md](./DEPLOY_iPad.md) を参照** — Render.com に無料デプロイすればブラウザだけで完結します。
+
 ### バックエンド
 
 ```bash
@@ -40,6 +42,16 @@ npm run dev
 ```
 
 `http://localhost:5173` でアプリにアクセス。`/api/*` は自動で backend にプロキシされます。
+
+### 本番ビルド (1サーバー構成)
+
+`npm run build` で生成した `frontend/dist/` を、起動中の backend が自動配信します。
+本番では Vite を起動せず、`uvicorn` だけで全UIが提供されます。
+
+```bash
+cd frontend && npm run build
+cd ../backend && uvicorn main:app --host 0.0.0.0 --port 8000
+```
 
 ## ファイル名フォーマット
 

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: glider-analyzer
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: |
+      pip install -r backend/requirements.txt
+      cd frontend && npm install && npm run build
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: GLIDER_DB_PATH
+        value: /tmp/glider.db
