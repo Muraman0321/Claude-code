@@ -28,6 +28,15 @@ class FlightSummaryOut(BaseModel):
     thermal_count: int | None
     thermal_time_s: float | None
     cruise_time_s: float | None
+    start_latitude: float | None = None
+    start_longitude: float | None = None
+    weather_temp_c: float | None = None
+    weather_wind_speed_kmh: float | None = None
+    weather_wind_dir_deg: float | None = None
+    weather_pressure_hpa: float | None = None
+    weather_cloud_cover_pct: float | None = None
+    weather_humidity_pct: float | None = None
+    weather_source: str | None = None
 
     class Config:
         from_attributes = True
@@ -81,3 +90,19 @@ class AircraftStats(BaseModel):
     avg_climb_in_thermals_ms: float | None
     avg_ground_speed_kmh: float | None
     best_glide_ratio: float | None
+
+
+class TimeOfDayBucket(BaseModel):
+    hour: int  # local hour 0-23, estimated from longitude
+    thermal_count: int
+    avg_climb_rate_ms: float
+    avg_altitude_gain_m: float
+    avg_duration_s: float
+
+
+class WeatherBucket(BaseModel):
+    label: str  # e.g. "0-5 km/h"
+    flight_count: int
+    avg_climb_rate_ms: float | None
+    avg_ground_speed_kmh: float | None
+    avg_best_glide: float | None

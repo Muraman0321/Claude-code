@@ -110,8 +110,73 @@ def test_analysis_detects_climb_and_glide():
     assert summary.best_glide_ratio > 0
 
 
+def test_weather_picks_nearest_hour(monkeypatch):
+    """The weather module should pick the hour closest to the flight start."""
+    import weather as wx
+
+    def fake_get(url, params, timeout):
+        class R:
+            def raise_for_status(self_): pass
+            def json(self_):
+                return {
+                    "hourly": {
+                        "time": ["2026-04-11T00:00", "2026-04-11T01:00", "2026-04-11T02:00", "2026-04-11T03:00"],
+                        "temperature_2m": [10.0, 11.0, 12.0, 13.0],
+                        "wind_speed_10m": [5.0, 6.0, 7.0, 8.0],
+                        "wind_direction_10m": [180, 190, 200, 210],
+                        "surface_pressure": [1013, 1013, 1014, 1014],
+                        "cloud_cover": [10, 20, 30, 40],
+                        "relative_humidity_2m": [70, 65, 60, 55],
+                    }
+                }
+        return R()
+
+    monkeypatch.setattr(wx.httpx, "get", fake_get)
+
+    from datetime import datetime, timezone
+    snap = wx.fetch_weather(36.2, 139.4, datetime(2026, 4, 11, 2, 20, tzinfo=timezone.utc))
+    assert snap is not None
+    # 02:20 is closest to 02:00 (index 2)
+    assert snap.temp_c == 12.0
+    assert snap.wind_speed_kmh == 7.0
+    assert snap.wind_dir_deg == 200
+
+
+def test_weather_returns_none_on_error(monkeypatch):
+    import weather as wx
+
+    def boom(url, params, timeout):
+        raise wx.httpx.ConnectError("no network")
+
+    monkeypatch.setattr(wx.httpx, "get", boom)
+
+    from datetime import datetime, timezone
+    assert wx.fetch_weather(0, 0, datetime(2026, 1, 1, tzinfo=timezone.utc)) is None
+
+
 if __name__ == "__main__":
+    # Tiny ad-hoc test runner so we don't require pytest just to run smoke tests.
+    class MonkeyPatch:
+        def __init__(self): self._undo = []
+        def setattr(self, target, name, value):
+            old = getattr(target, name)
+            self._undo.append((target, name, old))
+            setattr(target, name, value)
+        def reset(self):
+            for t, n, o in reversed(self._undo):
+                setattr(t, n, o)
+            self._undo.clear()
+
+    import inspect
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
-            fn()
-            print(f"OK  {name}")
+            sig = inspect.signature(fn)
+            mp = MonkeyPatch()
+            try:
+                if "monkeypatch" in sig.parameters:
+                    fn(mp)
+                else:
+                    fn()
+                print(f"OK  {name}")
+            finally:
+                mp.reset()

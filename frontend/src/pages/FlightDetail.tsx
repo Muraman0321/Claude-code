@@ -6,15 +6,40 @@ import { FlightMap } from "../components/FlightMap";
 import type { FlightDetail } from "../types";
 import { fmtDate, fmtDuration, fmtNum } from "../utils/format";
 
+const COMPASS = ["北", "北北東", "北東", "東北東", "東", "東南東", "南東", "南南東",
+  "南", "南南西", "南西", "西南西", "西", "西北西", "北西", "北北西"];
+
+function windDirJp(deg: number | null): string {
+  if (deg == null) return "—";
+  const idx = Math.round(((deg % 360) / 22.5)) % 16;
+  return `${COMPASS[idx]} (${deg.toFixed(0)}°)`;
+}
+
 export default function FlightDetailPage() {
   const { id } = useParams();
   const [flight, setFlight] = useState<FlightDetail | null>(null);
   const [colorBy, setColorBy] = useState<"altitude" | "climb" | "speed">("altitude");
+  const [wxBusy, setWxBusy] = useState(false);
+  const [wxError, setWxError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
     api.getFlight(Number(id)).then(setFlight).catch(console.error);
   }, [id]);
+
+  async function refreshWeather() {
+    if (!flight) return;
+    setWxBusy(true);
+    setWxError(null);
+    try {
+      const updated = await api.refreshWeather(flight.id);
+      setFlight({ ...flight, ...updated });
+    } catch (e) {
+      setWxError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWxBusy(false);
+    }
+  }
 
   if (!flight) return <div className="empty">読み込み中...</div>;
 
@@ -76,6 +101,58 @@ export default function FlightDetailPage() {
             <div className="metric-label">サーマル時間</div>
             <div className="metric-value">{fmtDuration(flight.thermal_time_s)}</div>
           </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>
+          気象 (離陸地点・離陸時刻)
+          <button
+            className="ghost"
+            style={{ marginLeft: "1rem", fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+            onClick={refreshWeather}
+            disabled={wxBusy}
+          >
+            {wxBusy ? "取得中..." : flight.weather_source ? "再取得" : "取得"}
+          </button>
+        </h2>
+        {wxError && <div style={{ color: "#cf222e", marginBottom: "0.5rem" }}>{wxError}</div>}
+        {flight.weather_source ? (
+          <div className="metric-grid">
+            <div className="metric">
+              <div className="metric-label">気温</div>
+              <div className="metric-value">{fmtNum(flight.weather_temp_c, 1, "°C")}</div>
+            </div>
+            <div className="metric">
+              <div className="metric-label">風速 (10m)</div>
+              <div className="metric-value">{fmtNum(flight.weather_wind_speed_kmh, 1, "km/h")}</div>
+            </div>
+            <div className="metric">
+              <div className="metric-label">風向</div>
+              <div className="metric-value" style={{ fontSize: "0.95rem" }}>
+                {windDirJp(flight.weather_wind_dir_deg)}
+              </div>
+            </div>
+            <div className="metric">
+              <div className="metric-label">気圧</div>
+              <div className="metric-value">{fmtNum(flight.weather_pressure_hpa, 0, "hPa")}</div>
+            </div>
+            <div className="metric">
+              <div className="metric-label">雲量</div>
+              <div className="metric-value">{fmtNum(flight.weather_cloud_cover_pct, 0, "%")}</div>
+            </div>
+            <div className="metric">
+              <div className="metric-label">湿度</div>
+              <div className="metric-value">{fmtNum(flight.weather_humidity_pct, 0, "%")}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="empty">
+            気象データなし — 「取得」ボタンで Open-Meteo から取得します
+          </div>
+        )}
+        <div style={{ fontSize: "0.75rem", color: "#57606a", marginTop: "0.4rem" }}>
+          source: {flight.weather_source ?? "—"}
         </div>
       </div>
 

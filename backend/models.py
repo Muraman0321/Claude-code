@@ -40,6 +40,20 @@ class Flight(Base):
     thermal_time_s = Column(Float, nullable=True)
     cruise_time_s = Column(Float, nullable=True)
 
+    # Takeoff location, used for the weather lookup and for time-of-day analysis
+    # (local hour is estimated from longitude when no timezone info is available).
+    start_latitude = Column(Float, nullable=True)
+    start_longitude = Column(Float, nullable=True)
+
+    # Weather snapshot at takeoff (nearest hourly cell from Open-Meteo).
+    weather_temp_c = Column(Float, nullable=True)
+    weather_wind_speed_kmh = Column(Float, nullable=True)
+    weather_wind_dir_deg = Column(Float, nullable=True)
+    weather_pressure_hpa = Column(Float, nullable=True)
+    weather_cloud_cover_pct = Column(Float, nullable=True)
+    weather_humidity_pct = Column(Float, nullable=True)
+    weather_source = Column(String, nullable=True)
+
     raw_igc = Column(Text, nullable=True)  # full file kept for re-analysis
 
     fixes = relationship("GpsFix", back_populates="flight", cascade="all, delete-orphan")

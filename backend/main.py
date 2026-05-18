@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 
 import analysis
 import igc_parser
+import weather as weather_svc
 from database import SessionLocal, init_db
 from filename_parser import parse_filename
 from models import Flight, GpsFix, ThermalRecord
@@ -24,7 +26,9 @@ from schemas import (
     FlightSummaryOut,
     PilotStats,
     ThermalOut,
+    TimeOfDayBucket,
     UploadResultOut,
+    WeatherBucket,
 )
 
 
@@ -74,13 +78,16 @@ def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
         db.delete(existing)
         db.flush()
 
+    start_fix = igc.fixes[0]
+    wx = weather_svc.fetch_weather(start_fix.latitude, start_fix.longitude, start_fix.timestamp)
+
     flight = Flight(
         filename=filename,
         pilot=meta.pilot,
         aircraft=meta.aircraft,
         remarks=meta.remarks,
         flight_date=meta.flight_date,
-        started_at=igc.fixes[0].timestamp.replace(tzinfo=None),
+        started_at=start_fix.timestamp.replace(tzinfo=None),
         ended_at=igc.fixes[-1].timestamp.replace(tzinfo=None),
         duration_s=summary.duration_s,
         total_distance_km=summary.total_distance_km,
@@ -96,6 +103,15 @@ def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
         thermal_count=summary.thermal_count,
         thermal_time_s=summary.thermal_time_s,
         cruise_time_s=summary.cruise_time_s,
+        start_latitude=start_fix.latitude,
+        start_longitude=start_fix.longitude,
+        weather_temp_c=wx.temp_c if wx else None,
+        weather_wind_speed_kmh=wx.wind_speed_kmh if wx else None,
+        weather_wind_dir_deg=wx.wind_dir_deg if wx else None,
+        weather_pressure_hpa=wx.pressure_hpa if wx else None,
+        weather_cloud_cover_pct=wx.cloud_cover_pct if wx else None,
+        weather_humidity_pct=wx.humidity_pct if wx else None,
+        weather_source=wx.source if wx else None,
         raw_igc=content.decode("latin-1"),
     )
 
@@ -265,6 +281,109 @@ def stats_aircraft(db: Session = Depends(get_db)):
         )
         for r in rows
     ]
+
+
+@app.get("/api/stats/time-of-day", response_model=list[TimeOfDayBucket])
+def stats_time_of_day(
+    pilot: str | None = None,
+    aircraft: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Aggregate detected thermals by local hour of day.
+
+    We do not have a timezone in IGC files (timestamps are UTC), so the
+    local hour is approximated as `(utc_hour + round(longitude/15)) % 24`,
+    which is accurate to ~±30 min for solar-driven thermal activity.
+    """
+    q = (
+        db.query(ThermalRecord, Flight)
+        .join(Flight, ThermalRecord.flight_id == Flight.id)
+    )
+    if pilot:
+        q = q.filter(Flight.pilot == pilot)
+    if aircraft:
+        q = q.filter(Flight.aircraft == aircraft)
+
+    buckets: dict[int, list[ThermalRecord]] = {}
+    for thermal, flight in q.all():
+        offset = round((flight.start_longitude or 0) / 15.0)
+        local_hour = (thermal.start_time.hour + offset) % 24
+        buckets.setdefault(local_hour, []).append(thermal)
+
+    out: list[TimeOfDayBucket] = []
+    for hour in sorted(buckets):
+        ts = buckets[hour]
+        out.append(TimeOfDayBucket(
+            hour=hour,
+            thermal_count=len(ts),
+            avg_climb_rate_ms=round(sum(t.avg_climb_rate_ms for t in ts) / len(ts), 2),
+            avg_altitude_gain_m=round(sum(t.altitude_gain_m for t in ts) / len(ts), 1),
+            avg_duration_s=round(sum(t.duration_s for t in ts) / len(ts), 1),
+        ))
+    return out
+
+
+_WIND_BUCKETS = [
+    ("0-5 km/h", 0, 5),
+    ("5-10 km/h", 5, 10),
+    ("10-15 km/h", 10, 15),
+    ("15-20 km/h", 15, 20),
+    ("20+ km/h", 20, 999),
+]
+
+
+def _avg(vals: list[float]) -> float | None:
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
+@app.get("/api/stats/weather", response_model=list[WeatherBucket])
+def stats_weather(db: Session = Depends(get_db)):
+    """Group flights into wind-speed buckets and report performance per bucket."""
+    flights = db.query(Flight).filter(Flight.weather_wind_speed_kmh.isnot(None)).all()
+    out: list[WeatherBucket] = []
+    for label, lo, hi in _WIND_BUCKETS:
+        bucket = [f for f in flights if lo <= (f.weather_wind_speed_kmh or 0) < hi]
+        if not bucket:
+            continue
+        out.append(WeatherBucket(
+            label=label,
+            flight_count=len(bucket),
+            avg_climb_rate_ms=_avg([f.avg_climb_in_thermals_ms for f in bucket if f.avg_climb_in_thermals_ms is not None]),
+            avg_ground_speed_kmh=_avg([f.avg_ground_speed_kmh for f in bucket if f.avg_ground_speed_kmh is not None]),
+            avg_best_glide=_avg([f.best_glide_ratio for f in bucket if f.best_glide_ratio is not None]),
+        ))
+    return out
+
+
+@app.post("/api/flights/{flight_id}/refresh-weather", response_model=FlightSummaryOut)
+def refresh_weather(flight_id: int, db: Session = Depends(get_db)):
+    """Re-fetch weather for a flight that was uploaded before weather support."""
+    flight = db.query(Flight).filter(Flight.id == flight_id).one_or_none()
+    if not flight:
+        raise HTTPException(status_code=404, detail="flight not found")
+    if flight.start_latitude is None or flight.start_longitude is None:
+        # Fall back to the first stored GPS fix.
+        fix = (
+            db.query(GpsFix).filter(GpsFix.flight_id == flight_id).order_by(GpsFix.seq).first()
+        )
+        if not fix:
+            raise HTTPException(status_code=400, detail="no GPS fix available")
+        flight.start_latitude = fix.latitude
+        flight.start_longitude = fix.longitude
+    when = flight.started_at or datetime.combine(flight.flight_date, datetime.min.time())
+    wx = weather_svc.fetch_weather(flight.start_latitude, flight.start_longitude, when)
+    if wx is None:
+        raise HTTPException(status_code=502, detail="weather lookup failed")
+    flight.weather_temp_c = wx.temp_c
+    flight.weather_wind_speed_kmh = wx.wind_speed_kmh
+    flight.weather_wind_dir_deg = wx.wind_dir_deg
+    flight.weather_pressure_hpa = wx.pressure_hpa
+    flight.weather_cloud_cover_pct = wx.cloud_cover_pct
+    flight.weather_humidity_pct = wx.humidity_pct
+    flight.weather_source = wx.source
+    db.commit()
+    db.refresh(flight)
+    return flight
 
 
 @app.get("/api/health")

@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { CompareBarChart } from "../components/Charts";
-import type { AircraftStats, FlightSummary, PilotStats } from "../types";
+import type {
+  AircraftStats,
+  FlightSummary,
+  PilotStats,
+  TimeOfDayBucket,
+  WeatherBucket,
+} from "../types";
 import { fmtNum } from "../utils/format";
 
 interface MonthBucket {
@@ -38,20 +44,44 @@ export default function Statistics() {
   const [pilots, setPilots] = useState<PilotStats[]>([]);
   const [aircraft, setAircraft] = useState<AircraftStats[]>([]);
   const [flights, setFlights] = useState<FlightSummary[]>([]);
+  const [timeOfDay, setTimeOfDay] = useState<TimeOfDayBucket[]>([]);
+  const [weather, setWeather] = useState<WeatherBucket[]>([]);
   const [selectedPilot, setSelectedPilot] = useState("");
 
   useEffect(() => {
-    Promise.all([api.pilotStats(), api.aircraftStats(), api.listFlights()])
-      .then(([p, a, f]) => {
+    Promise.all([
+      api.pilotStats(),
+      api.aircraftStats(),
+      api.listFlights(),
+      api.weatherStats(),
+    ])
+      .then(([p, a, f, w]) => {
         setPilots(p);
         setAircraft(a);
         setFlights(f);
+        setWeather(w);
       })
       .catch(console.error);
   }, []);
 
+  useEffect(() => {
+    api.timeOfDayStats({ pilot: selectedPilot || undefined }).then(setTimeOfDay).catch(console.error);
+  }, [selectedPilot]);
+
   const filtered = selectedPilot ? flights.filter((f) => f.pilot === selectedPilot) : flights;
   const monthData = bucketByMonth(filtered);
+
+  // Fill missing hours with zeros so the chart shows a continuous day axis.
+  const hourMap = new Map(timeOfDay.map((b) => [b.hour, b]));
+  const hourData = Array.from({ length: 24 }, (_, h) => {
+    const b = hourMap.get(h);
+    return {
+      label: `${h.toString().padStart(2, "0")}時`,
+      "平均上昇率(m/s)": b ? b.avg_climb_rate_ms : 0,
+      "サーマル数": b ? b.thermal_count : 0,
+      "平均獲得高度(m)": b ? b.avg_altitude_gain_m : 0,
+    };
+  });
 
   return (
     <div>
@@ -124,6 +154,78 @@ export default function Statistics() {
             { key: "飛行時間(h)", label: "飛行時間 (h)", color: "#1f6feb" },
           ]}
         />
+      </div>
+
+      <div className="card">
+        <h2>時間帯別サーマル強度 (現地時刻)</h2>
+        <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
+          検出されたサーマルを開始時刻（経度から推定した現地時刻）でバケット化したもの。
+          {selectedPilot && <> 選手フィルタ: <strong>{selectedPilot}</strong></>}
+        </p>
+        {timeOfDay.length === 0 ? (
+          <div className="empty">サーマルデータがありません</div>
+        ) : (
+          <CompareBarChart
+            data={hourData}
+            metrics={[
+              { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
+              { key: "サーマル数", label: "サーマル数", color: "#1f6feb" },
+              { key: "平均獲得高度(m)", label: "平均獲得高度 (m)", color: "#9a6700" },
+            ]}
+          />
+        )}
+      </div>
+
+      <div className="card">
+        <h2>気象条件別 (風速バケット)</h2>
+        <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
+          離陸地点・離陸時刻の地表風速（Open-Meteo）で各フライトを分類し、効率指標を比較。
+        </p>
+        {weather.length === 0 ? (
+          <div className="empty">
+            気象データのあるフライトがありません。<br />
+            各フライトの詳細ページで「気象を取得」ボタンを押してください。
+          </div>
+        ) : (
+          <>
+            <table>
+              <thead>
+                <tr>
+                  <th>風速帯</th>
+                  <th>フライト数</th>
+                  <th>平均上昇率</th>
+                  <th>平均速度</th>
+                  <th>最大L/D平均</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weather.map((w) => (
+                  <tr key={w.label}>
+                    <td><strong>{w.label}</strong></td>
+                    <td>{w.flight_count}</td>
+                    <td>{fmtNum(w.avg_climb_rate_ms, 2, "m/s")}</td>
+                    <td>{fmtNum(w.avg_ground_speed_kmh, 1, "km/h")}</td>
+                    <td>{fmtNum(w.avg_best_glide, 1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ marginTop: "1rem" }}>
+              <CompareBarChart
+                data={weather.map((w) => ({
+                  label: w.label,
+                  "平均上昇率(m/s)": w.avg_climb_rate_ms ?? 0,
+                  "平均速度(km/h)": w.avg_ground_speed_kmh ?? 0,
+                  "最大L/D": w.avg_best_glide ?? 0,
+                }))}
+                metrics={[
+                  { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
+                  { key: "最大L/D", label: "最大L/D", color: "#9a6700" },
+                ]}
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
