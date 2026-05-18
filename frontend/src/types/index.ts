@@ -139,6 +139,33 @@ export interface FlightTrack {
   points: TrackPoint[];
 }
 
+export interface HistogramBin {
+  label: string;
+  lo: number;
+  hi: number | null;
+  count: number;
+}
+
+export interface HistogramGroup {
+  label: string;
+  key: string;
+  flight_count: number;
+  fix_count: number;
+  climb_mean_ms: number | null;
+  sink_mean_ms: number | null;
+  climb_hist: HistogramBin[];
+  sink_hist: HistogramBin[];
+}
+
+export interface BlockStats {
+  block_label: string;
+  total_fixes: number;
+  total_flights: number;
+  overall: HistogramGroup;
+  by_season: HistogramGroup[];
+  by_day: HistogramGroup[];
+}
+
 export interface ThermalLight {
   flight_id: number;
   pilot: string;

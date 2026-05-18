@@ -164,6 +164,33 @@ class FlightTrack(BaseModel):
     points: list[TrackPoint]
 
 
+class HistogramBin(BaseModel):
+    label: str
+    lo: float
+    hi: float | None  # None = open-ended upper bound
+    count: int
+
+
+class HistogramGroup(BaseModel):
+    label: str       # display label (e.g. "全データ", "春", "2026-04-15")
+    key: str         # stable key ("all" / season_key / ISO date)
+    flight_count: int
+    fix_count: int
+    climb_mean_ms: float | None
+    sink_mean_ms: float | None
+    climb_hist: list[HistogramBin]
+    sink_hist: list[HistogramBin]
+
+
+class BlockStats(BaseModel):
+    block_label: str
+    total_fixes: int
+    total_flights: int
+    overall: HistogramGroup
+    by_season: list[HistogramGroup]
+    by_day: list[HistogramGroup]
+
+
 class ThermalLight(BaseModel):
     """Skinny thermal record for the compare-map overlay (no fixes)."""
     flight_id: int

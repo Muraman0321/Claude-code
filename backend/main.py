@@ -26,10 +26,13 @@ from schemas import (
     AircraftStats,
     AreaBlock,
     AreaStats,
+    BlockStats,
     FixOut,
     FlightDetailOut,
     FlightSummaryOut,
     FlightTrack,
+    HistogramBin,
+    HistogramGroup,
     HourCell,
     PilotStats,
     SeasonBucket,
@@ -732,6 +735,178 @@ def stats_area_grid(
         center_lon=center_lon,
         cell_km=cell_km,
         blocks=blocks,
+    )
+
+
+CLIMB_BIN_EDGES = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]  # last bin = 5+
+SINK_BIN_EDGES = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]              # last bin = 5+ (absolute)
+
+
+def _bin_label(lo: float, hi: float | None, unit: str = "m/s") -> str:
+    if hi is None:
+        return f"{lo:g}+ {unit}"
+    return f"{lo:g}–{hi:g} {unit}"
+
+
+def _make_histogram(values: list[float], edges: list[float]) -> list[HistogramBin]:
+    """Bin values into [edges[0], edges[1]), ..., [edges[-1], ∞). Last bin is open-ended."""
+    counts = [0] * len(edges)
+    for v in values:
+        # values are expected to be non-negative (we pass abs sink)
+        placed = False
+        for i in range(len(edges) - 1):
+            if v < edges[i + 1]:
+                counts[i] += 1
+                placed = True
+                break
+        if not placed:
+            counts[-1] += 1
+    bins: list[HistogramBin] = []
+    for i in range(len(edges)):
+        lo = edges[i]
+        hi = edges[i + 1] if i + 1 < len(edges) else None
+        bins.append(HistogramBin(label=_bin_label(lo, hi), lo=lo, hi=hi, count=counts[i]))
+    return bins
+
+
+def _mean(vs: list[float]) -> float | None:
+    return round(sum(vs) / len(vs), 2) if vs else None
+
+
+def _point_in_sector(
+    lat: float, lon: float,
+    center_lat: float, center_lon: float,
+    radius_km: float, bearing_from: float, bearing_to: float,
+) -> bool:
+    if analysis.haversine_m(center_lat, center_lon, lat, lon) > radius_km * 1000:
+        return False
+    b = analysis.bearing_deg(center_lat, center_lon, lat, lon)
+    return bearing_from <= b < bearing_to
+
+
+def _point_in_cell(
+    lat: float, lon: float,
+    center_lat: float, center_lon: float,
+    cell_km: float, dx: int, dy: int,
+) -> bool:
+    import math as _math
+    lat_per_km = 1.0 / 111.0
+    lon_per_km = 1.0 / (111.0 * _math.cos(_math.radians(center_lat)) or 1e-9)
+    ratio_y = (lat - center_lat) / (cell_km * lat_per_km)
+    ratio_x = (lon - center_lon) / (cell_km * lon_per_km)
+    return abs(ratio_x - dx) <= 0.5 and abs(ratio_y - dy) <= 0.5
+
+
+def _build_group(
+    label: str, key: str,
+    climbs: list[float], sinks: list[float],
+    flight_ids: set[int],
+) -> HistogramGroup:
+    return HistogramGroup(
+        label=label,
+        key=key,
+        flight_count=len(flight_ids),
+        fix_count=len(climbs) + len(sinks),
+        climb_mean_ms=_mean(climbs),
+        sink_mean_ms=_mean(sinks),
+        climb_hist=_make_histogram(climbs, CLIMB_BIN_EDGES),
+        sink_hist=_make_histogram(sinks, SINK_BIN_EDGES),
+    )
+
+
+@app.get("/api/stats/area/block-stats", response_model=BlockStats)
+def stats_area_block(
+    shape: str,
+    center_lat: float = MENUMA_LAT,
+    center_lon: float = MENUMA_LON,
+    block_label: str = "",
+    # sector params
+    bearing_from: float | None = None,
+    bearing_to: float | None = None,
+    radius_km: float | None = None,
+    # cell params
+    dx: int | None = None,
+    dy: int | None = None,
+    cell_km: float | None = None,
+    db: Session = Depends(get_db),
+):
+    """Climb/sink rate histograms for one area block, grouped overall, by season, and by day.
+
+    `shape` must be either "sector" (requires bearing_from/bearing_to/radius_km) or
+    "cell" (requires dx/dy/cell_km).
+    """
+    if shape == "sector":
+        if bearing_from is None or bearing_to is None or radius_km is None:
+            raise HTTPException(400, "sector shape requires bearing_from, bearing_to, radius_km")
+
+        def in_block(lat: float, lon: float) -> bool:
+            return _point_in_sector(lat, lon, center_lat, center_lon, radius_km, bearing_from, bearing_to)
+    elif shape == "cell":
+        if dx is None or dy is None or cell_km is None:
+            raise HTTPException(400, "cell shape requires dx, dy, cell_km")
+
+        def in_block(lat: float, lon: float) -> bool:
+            return _point_in_cell(lat, lon, center_lat, center_lon, cell_km, dx, dy)
+    else:
+        raise HTTPException(400, "shape must be 'sector' or 'cell'")
+
+    rows = (
+        db.query(GpsFix, Flight)
+        .join(Flight, GpsFix.flight_id == Flight.id)
+        .filter(GpsFix.climb_rate_ms.isnot(None))
+        .all()
+    )
+
+    all_climbs: list[float] = []
+    all_sinks: list[float] = []
+    all_flights: set[int] = set()
+    season_climbs: dict[str, list[float]] = {k: [] for _, k, _ in _SEASONS}
+    season_sinks: dict[str, list[float]] = {k: [] for _, k, _ in _SEASONS}
+    season_flights: dict[str, set[int]] = {k: set() for _, k, _ in _SEASONS}
+    day_climbs: dict[str, list[float]] = {}
+    day_sinks: dict[str, list[float]] = {}
+    day_flights: dict[str, set[int]] = {}
+
+    season_label = {k: label for label, k, _ in _SEASONS}
+
+    for fix, flight in rows:
+        if not in_block(fix.latitude, fix.longitude):
+            continue
+        cr = fix.climb_rate_ms
+        date_key = flight.flight_date.isoformat()
+        _, skey = _season_of(flight.flight_date.month)
+
+        all_flights.add(flight.id)
+        season_flights[skey].add(flight.id)
+        day_flights.setdefault(date_key, set()).add(flight.id)
+
+        if cr > 0:
+            all_climbs.append(cr)
+            season_climbs[skey].append(cr)
+            day_climbs.setdefault(date_key, []).append(cr)
+        elif cr < 0:
+            s = -cr
+            all_sinks.append(s)
+            season_sinks[skey].append(s)
+            day_sinks.setdefault(date_key, []).append(s)
+
+    by_season: list[HistogramGroup] = []
+    for _, k, _ in _SEASONS:
+        if not season_flights[k]:
+            continue
+        by_season.append(_build_group(season_label[k], k, season_climbs[k], season_sinks[k], season_flights[k]))
+
+    by_day: list[HistogramGroup] = []
+    for d in sorted(day_flights):
+        by_day.append(_build_group(d, d, day_climbs.get(d, []), day_sinks.get(d, []), day_flights[d]))
+
+    return BlockStats(
+        block_label=block_label or "Block",
+        total_fixes=len(all_climbs) + len(all_sinks),
+        total_flights=len(all_flights),
+        overall=_build_group("全データ", "all", all_climbs, all_sinks, all_flights),
+        by_season=by_season,
+        by_day=by_day,
     )
 
 

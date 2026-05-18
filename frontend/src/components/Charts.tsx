@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { Fix } from "../types";
+import type { Fix, HistogramBin } from "../types";
 
 function toMinutes(fixes: Fix[]): { t: number; alt: number; climb: number; speed: number }[] {
   if (fixes.length === 0) return [];
@@ -101,6 +101,37 @@ export function ClimbHistogram({ fixes }: { fixes: Fix[] }) {
     </div>
   );
 }
+
+export function RateHistogramChart({
+  bins,
+  color,
+  unit = "m/s",
+  height = 180,
+}: {
+  bins: HistogramBin[];
+  color: string;
+  unit?: string;
+  height?: number;
+}) {
+  const data = bins.map((b) => ({
+    bin: b.hi == null ? `${b.lo}+` : `${b.lo}-${b.hi}`,
+    count: b.count,
+  }));
+  return (
+    <div style={{ width: "100%", height }}>
+      <ResponsiveContainer>
+        <BarChart data={data} margin={{ top: 8, right: 12, bottom: 24, left: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="bin" tick={{ fontSize: 11 }} label={{ value: unit, position: "insideBottom", offset: -4, style: { fontSize: 11 } }} />
+          <YAxis tick={{ fontSize: 11 }} />
+          <Tooltip />
+          <Bar dataKey="count" fill={color} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 
 interface CompareDatum {
   label: string;

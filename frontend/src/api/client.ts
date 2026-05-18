@@ -1,6 +1,7 @@
 import type {
   AircraftStats,
   AreaStats,
+  BlockStats,
   FlightDetail,
   FlightSummary,
   FlightTrack,
@@ -78,6 +79,22 @@ export const api = {
   },
   thermals: (ids: number[]) => {
     return get<ThermalLight[]>(`/thermals?ids=${ids.join(",")}`);
+  },
+  blockStats: (params: {
+    shape: "sector" | "cell";
+    center_lat: number;
+    center_lon: number;
+    block_label?: string;
+    bearing_from?: number;
+    bearing_to?: number;
+    radius_km?: number;
+    dx?: number;
+    dy?: number;
+    cell_km?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v != null) qs.set(k, String(v));
+    return get<BlockStats>(`/stats/area/block-stats?${qs.toString()}`);
   },
 
   async refreshWeather(id: number): Promise<FlightSummary> {
