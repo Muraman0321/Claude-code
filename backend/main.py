@@ -1,6 +1,7 @@
 """FastAPI app exposing IGC upload, flight detail, and aggregate endpoints."""
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -51,9 +52,9 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Glider Flight Analyzer", lifespan=lifespan)
+core = FastAPI(title="Glider Flight Analyzer", lifespan=lifespan)
 
-app.add_middleware(
+core.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
@@ -186,7 +187,7 @@ def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
     )
 
 
-@app.post("/api/upload", response_model=list[UploadResultOut])
+@core.post("/api/upload", response_model=list[UploadResultOut])
 async def upload(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
     results: list[UploadResultOut] = []
     for f in files:
@@ -204,7 +205,7 @@ class DriveImportRequest(BaseModel):
     max_files: int = 200
 
 
-@app.post("/api/import-drive-folder", response_model=list[UploadResultOut])
+@core.post("/api/import-drive-folder", response_model=list[UploadResultOut])
 def import_drive_folder(req: DriveImportRequest, db: Session = Depends(get_db)):
     """Import all IGC files from a publicly-shared Google Drive folder URL.
 
@@ -256,7 +257,7 @@ def import_drive_folder(req: DriveImportRequest, db: Session = Depends(get_db)):
     return results
 
 
-@app.get("/api/flights", response_model=list[FlightSummaryOut])
+@core.get("/api/flights", response_model=list[FlightSummaryOut])
 def list_flights(
     pilot: str | None = None,
     aircraft: str | None = None,
@@ -276,7 +277,7 @@ def list_flights(
     return q.all()
 
 
-@app.get("/api/flights/{flight_id}", response_model=FlightDetailOut)
+@core.get("/api/flights/{flight_id}", response_model=FlightDetailOut)
 def flight_detail(flight_id: int, db: Session = Depends(get_db)):
     flight = db.query(Flight).filter(Flight.id == flight_id).one_or_none()
     if not flight:
@@ -296,7 +297,7 @@ def flight_detail(flight_id: int, db: Session = Depends(get_db)):
     )
 
 
-@app.delete("/api/flights/{flight_id}")
+@core.delete("/api/flights/{flight_id}")
 def delete_flight(flight_id: int, db: Session = Depends(get_db)):
     flight = db.query(Flight).filter(Flight.id == flight_id).one_or_none()
     if not flight:
@@ -306,19 +307,19 @@ def delete_flight(flight_id: int, db: Session = Depends(get_db)):
     return {"deleted": flight_id}
 
 
-@app.get("/api/pilots", response_model=list[str])
+@core.get("/api/pilots", response_model=list[str])
 def list_pilots(db: Session = Depends(get_db)):
     rows = db.query(Flight.pilot).distinct().order_by(Flight.pilot).all()
     return [r[0] for r in rows]
 
 
-@app.get("/api/aircraft", response_model=list[str])
+@core.get("/api/aircraft", response_model=list[str])
 def list_aircraft(db: Session = Depends(get_db)):
     rows = db.query(Flight.aircraft).distinct().order_by(Flight.aircraft).all()
     return [r[0] for r in rows]
 
 
-@app.get("/api/stats/pilots", response_model=list[PilotStats])
+@core.get("/api/stats/pilots", response_model=list[PilotStats])
 def stats_pilots(db: Session = Depends(get_db)):
     rows = (
         db.query(
@@ -348,7 +349,7 @@ def stats_pilots(db: Session = Depends(get_db)):
     ]
 
 
-@app.get("/api/stats/aircraft", response_model=list[AircraftStats])
+@core.get("/api/stats/aircraft", response_model=list[AircraftStats])
 def stats_aircraft(db: Session = Depends(get_db)):
     rows = (
         db.query(
@@ -393,7 +394,7 @@ def _avg(vals: list[float]) -> float | None:
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
-@app.get("/api/stats/time-of-day", response_model=list[TimeOfDayBucket])
+@core.get("/api/stats/time-of-day", response_model=list[TimeOfDayBucket])
 def stats_time_of_day(
     pilot: str | None = None,
     aircraft: str | None = None,
@@ -439,7 +440,7 @@ def stats_time_of_day(
     return out
 
 
-@app.get("/api/stats/season", response_model=list[SeasonBucket])
+@core.get("/api/stats/season", response_model=list[SeasonBucket])
 def stats_season(
     pilot: str | None = None,
     aircraft: str | None = None,
@@ -488,7 +489,7 @@ _WIND_BUCKETS = [
 ]
 
 
-@app.get("/api/stats/weather", response_model=list[WeatherBucket])
+@core.get("/api/stats/weather", response_model=list[WeatherBucket])
 def stats_weather(db: Session = Depends(get_db)):
     """Group flights into wind-speed buckets and report performance per bucket."""
     flights = db.query(Flight).filter(Flight.weather_wind_speed_kmh.isnot(None)).all()
@@ -507,7 +508,7 @@ def stats_weather(db: Session = Depends(get_db)):
     return out
 
 
-@app.post("/api/flights/{flight_id}/refresh-weather", response_model=FlightSummaryOut)
+@core.post("/api/flights/{flight_id}/refresh-weather", response_model=FlightSummaryOut)
 def refresh_weather(flight_id: int, db: Session = Depends(get_db)):
     """Re-fetch weather for a flight that was uploaded before weather support."""
     flight = db.query(Flight).filter(Flight.id == flight_id).one_or_none()
@@ -571,7 +572,7 @@ def _local_hour(thermal_start, longitude: float) -> int:
     return (thermal_start.hour + offset) % 24
 
 
-@app.get("/api/thermals", response_model=list[ThermalLight])
+@core.get("/api/thermals", response_model=list[ThermalLight])
 def flight_thermals(
     ids: str,
     max_thermals: int = Query(default=1500, ge=100, le=5000),
@@ -616,7 +617,7 @@ def flight_thermals(
     return result
 
 
-@app.get("/api/stats/area/sectors", response_model=AreaStats)
+@core.get("/api/stats/area/sectors", response_model=AreaStats)
 def stats_area_sectors(
     center_lat: float = MENUMA_LAT,
     center_lon: float = MENUMA_LON,
@@ -686,7 +687,7 @@ def _grid_label(dx: int, dy: int, half: int) -> str:
     return f"R{row}C{col}"
 
 
-@app.get("/api/stats/area/grid", response_model=AreaStats)
+@core.get("/api/stats/area/grid", response_model=AreaStats)
 def stats_area_grid(
     center_lat: float = MENUMA_LAT,
     center_lon: float = MENUMA_LON,
@@ -825,7 +826,7 @@ def _build_group(
     )
 
 
-@app.get("/api/stats/area/block-stats", response_model=BlockStats)
+@core.get("/api/stats/area/block-stats", response_model=BlockStats)
 def stats_area_block(
     shape: str,
     center_lat: float = MENUMA_LAT,
@@ -921,7 +922,7 @@ def stats_area_block(
     )
 
 
-@app.get("/api/tracks", response_model=list[FlightTrack])
+@core.get("/api/tracks", response_model=list[FlightTrack])
 def flight_tracks(
     ids: str,
     max_points: int = 120,
@@ -974,7 +975,7 @@ def flight_tracks(
     return out
 
 
-@app.get("/api/normalize-filename")
+@core.get("/api/normalize-filename")
 def api_normalize_filename(name: str):
     """Dry-run filename normalization so the UI can preview before upload."""
     normalized, notes = normalize_filename(name)
@@ -998,7 +999,7 @@ def api_normalize_filename(name: str):
     }
 
 
-@app.get("/api/health")
+@core.get("/api/health")
 def health():
     return {"status": "ok"}
 
@@ -1007,12 +1008,23 @@ def health():
 # In dev, run Vite separately (`npm run dev`) which proxies /api to this server.
 STATIC_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if STATIC_DIR.is_dir():
-    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+    core.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
 
-    @app.get("/{full_path:path}")
+    @core.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
         candidate = STATIC_DIR / full_path
         if candidate.is_file():
             return FileResponse(candidate)
         # React Router uses history mode; fall back to index.html.
         return FileResponse(STATIC_DIR / "index.html")
+
+
+# Optional sub-path mount. When BASE_PATH is set (e.g. "/glider"), expose the
+# entire app under that prefix so it can sit behind a reverse proxy on a parent
+# site (e.g. jbb2026sg.com/glider). When empty, serve at root as before.
+BASE_PATH = os.environ.get("BASE_PATH", "").rstrip("/")
+if BASE_PATH:
+    app = FastAPI(title="Glider Flight Analyzer (mount wrapper)")
+    app.mount(BASE_PATH, core)
+else:
+    app = core

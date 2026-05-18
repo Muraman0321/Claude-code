@@ -13,7 +13,9 @@ import type {
   WeatherBucket,
 } from "../types";
 
-const BASE = "/api";
+// Use Vite's BASE_URL so the same build works at the root (`/api`) and under
+// a sub-path (e.g. `/glider/api`) without hard-coding it everywhere.
+const BASE = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
@@ -103,12 +105,27 @@ export const api = {
     return res.json();
   },
 
-  async upload(files: FileList | File[]): Promise<UploadResult[]> {
-    const form = new FormData();
-    Array.from(files).forEach((f) => form.append("files", f));
-    const res = await fetch(`${BASE}/upload`, { method: "POST", body: form });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return res.json();
+  // Upload in small batches so a single Render free-tier request never has
+  // to ingest enough files to time out (30 s proxy limit) → avoids 502s when
+  // dropping many IGCs at once. Reports progress via the optional callback.
+  async upload(
+    files: FileList | File[],
+    onBatch?: (done: number, total: number) => void,
+    batchSize = 5,
+  ): Promise<UploadResult[]> {
+    const all = Array.from(files);
+    const results: UploadResult[] = [];
+    for (let i = 0; i < all.length; i += batchSize) {
+      const chunk = all.slice(i, i + batchSize);
+      const form = new FormData();
+      chunk.forEach((f) => form.append("files", f));
+      const res = await fetch(`${BASE}/upload`, { method: "POST", body: form });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const batch = (await res.json()) as UploadResult[];
+      results.push(...batch);
+      onBatch?.(Math.min(i + batchSize, all.length), all.length);
+    }
+    return results;
   },
 
   async importDriveFolder(url: string, maxFiles = 200): Promise<UploadResult[]> {

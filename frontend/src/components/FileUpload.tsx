@@ -6,6 +6,7 @@ export function FileUpload({ onDone }: { onDone: () => void }) {
   const [dragging, setDragging] = useState(false);
   const [results, setResults] = useState<UploadResult[]>([]);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [driveUrl, setDriveUrl] = useState("");
   const [driveBusy, setDriveBusy] = useState(false);
   const [driveError, setDriveError] = useState<string | null>(null);
@@ -14,8 +15,9 @@ export function FileUpload({ onDone }: { onDone: () => void }) {
   async function handleFiles(files: FileList | File[]) {
     if (!files || files.length === 0) return;
     setBusy(true);
+    setProgress({ done: 0, total: files.length });
     try {
-      const r = await api.upload(files);
+      const r = await api.upload(files, (done, total) => setProgress({ done, total }));
       setResults(r);
       onDone();
     } catch (e: unknown) {
@@ -23,6 +25,7 @@ export function FileUpload({ onDone }: { onDone: () => void }) {
       setResults([{ filename: "(upload)", success: false, flight_id: null, error: msg }]);
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
@@ -67,7 +70,10 @@ export function FileUpload({ onDone }: { onDone: () => void }) {
           onChange={(e) => e.target.files && handleFiles(e.target.files)}
         />
         {busy ? (
-          <span>アップロード中...</span>
+          <span>
+            アップロード中...
+            {progress && progress.total > 1 && ` (${progress.done}/${progress.total})`}
+          </span>
         ) : (
           <>
             <div style={{ fontSize: "1rem", marginBottom: "0.4rem" }}>
