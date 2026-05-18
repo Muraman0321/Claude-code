@@ -6,7 +6,7 @@ services:
     region: singapore
     buildCommand: |
       pip install -r backend/requirements.txt
-      cd frontend && npm install && VITE_BASE_PATH=/glider/ npm run build
+      cd frontend && npm install && npm run build
     startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
@@ -15,7 +15,5 @@ services:
         value: 20.18.0
       - key: GLIDER_DB_PATH
         value: /tmp/glider.db
-      # Mount the entire app under /glider so it sits behind a reverse proxy
-      # at jbb2026sg.com/glider. Remove BASE_PATH to serve from root again.
-      - key: BASE_PATH
-        value: /glider
+      # Sub-path support is still available if needed: set BASE_PATH=/foo
+      # and rebuild with VITE_BASE_PATH=/foo/ to mount under a sub-path.
