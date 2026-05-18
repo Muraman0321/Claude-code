@@ -6,7 +6,8 @@ import { fmtNum } from "../utils/format";
 
 type Mode = "sectors" | "grid";
 
-const MENUMA = { lat: 36.18, lon: 139.387 };
+// 妻沼グライダー滑空場: 36°12'41" N 139°25'08" E
+const MENUMA = { lat: 36.2114, lon: 139.4189 };
 
 function heatColor(value: number | null, maxValue: number): string {
   if (value == null || maxValue <= 0) return "#e7eaee";

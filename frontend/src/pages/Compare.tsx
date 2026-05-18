@@ -133,7 +133,7 @@ export default function Compare() {
 
   const mapCenter = useMemo<[number, number]>(() => {
     const pts = tracks.flatMap((t) => t.points);
-    if (pts.length === 0) return [36.18, 139.39];
+    if (pts.length === 0) return [36.2114, 139.4189];
     const lat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
     const lon = pts.reduce((s, p) => s + p.lon, 0) / pts.length;
     return [lat, lon];

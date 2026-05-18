@@ -467,8 +467,9 @@ def refresh_weather(flight_id: int, db: Session = Depends(get_db)):
     return flight
 
 
-MENUMA_LAT = 36.180
-MENUMA_LON = 139.387
+# 妻沼グライダー滑空場: 36°12'41" N 139°25'08" E
+MENUMA_LAT = 36.2114
+MENUMA_LON = 139.4189
 
 
 def _hour_cells(climbs_by_hour: dict[int, list[float]]) -> list[HourCell]:
