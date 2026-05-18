@@ -65,9 +65,19 @@ const FLIGHT_METRICS: (AxisDef & { key: MetricKey })[] = [
 
 const COLORS = ["#1f6feb", "#1a7f37", "#cf222e", "#9a6700", "#6f42c1", "#1b9aaa", "#e07b00", "#d63384"];
 
+// These fields store 0 to mean "not computed / no data", not a true zero.
+// Treat them as missing rather than valid zeros in statistical calculations.
+const ZERO_MEANS_MISSING = new Set([
+  "avg_climb_in_thermals_ms", // 0 when no thermals detected
+  "best_glide_ratio",         // 0 when no valid glide window found
+  "max_altitude_m",           // 0 only when GPS completely failed
+]);
+
 function getNum(f: FlightSummary, key: string): number | null {
   const v = (f as unknown as Record<string, number | null | undefined>)[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  if (ZERO_MEANS_MISSING.has(key) && v <= 0) return null;
+  return v;
 }
 
 function pearson(xs: number[], ys: number[]): number | null {
@@ -132,6 +142,12 @@ export default function Weather() {
 
   const xDef = WEATHER_VARS.find((v) => v.key === xKey)!;
   const yDef = FLIGHT_METRICS.find((v) => v.key === yKey)!;
+
+  // Flights that have at least one weather variable fetched
+  const weatherCount = useMemo(
+    () => filtered.filter((f) => f.weather_source != null).length,
+    [filtered],
+  );
 
   const points = useMemo(() => {
     const out: { x: number; y: number; label: string }[] = [];
@@ -202,8 +218,19 @@ export default function Weather() {
             <option value="">機体 (すべて)</option>
             {aircrafts.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
-          <span style={{ color: "#57606a", alignSelf: "center" }}>
-            該当フライト: {filtered.length} / 全{flights.length}件
+          <span style={{ alignSelf: "center", fontSize: "0.88rem" }}>
+            <span style={{ color: "#57606a" }}>
+              該当: {filtered.length}件 / 全{flights.length}件
+            </span>
+            {" — "}
+            <span style={{ color: weatherCount < filtered.length ? "#9a6700" : "#1a7f37", fontWeight: 500 }}>
+              気象データあり: {weatherCount}件
+            </span>
+            {weatherCount < filtered.length && (
+              <span style={{ color: "#9a6700", marginLeft: "0.4rem" }}>
+                ({filtered.length - weatherCount}件は未取得 — ダッシュボードから「気象更新」で取得可)
+              </span>
+            )}
           </span>
         </div>
       </div>
@@ -226,7 +253,7 @@ export default function Weather() {
           <span style={{ alignSelf: "center" }}>
             <strong>Pearson r = {r != null ? r.toFixed(3) : "—"}</strong>
             <span style={{ color: "#57606a", marginLeft: "0.4rem" }}>
-              ({describeCorr(r)}, n={points.length})
+              ({describeCorr(r)}, 有効 n={points.length})
             </span>
           </span>
         </div>
