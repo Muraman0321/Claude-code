@@ -4,6 +4,7 @@ import Compare from "./pages/Compare";
 import Dashboard from "./pages/Dashboard";
 import FlightDetail from "./pages/FlightDetail";
 import Statistics from "./pages/Statistics";
+import Weather from "./pages/Weather";
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
         <NavLink to="/compare">比較</NavLink>
         <NavLink to="/statistics">統計</NavLink>
         <NavLink to="/area">エリア分析</NavLink>
+        <NavLink to="/weather">気象分析</NavLink>
       </nav>
       <main>
         <Routes>
@@ -22,6 +24,7 @@ export default function App() {
           <Route path="/compare" element={<Compare />} />
           <Route path="/statistics" element={<Statistics />} />
           <Route path="/area" element={<Area />} />
+          <Route path="/weather" element={<Weather />} />
         </Routes>
       </main>
     </div>
