@@ -1,7 +1,12 @@
 """Parse the project-specific IGC filename convention.
 
-Format: yy.mm.dd_<aircraft>_<pilot>_<remarks>.igc
-Example: 26.04.11_JA04KH_shin_27*3.igc
+Format: yy<sep>mm<sep>dd_<aircraft>_<pilot>[_<remarks>].igc
+where <sep> is either `.` or `_`.
+
+Examples:
+  26.04.11_JA04KH_shin_27*3.igc
+  26.04.11_JA2408_Tajima_27_2.igc
+  26_04_12_JA04KH_Tajima.igc
 """
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ from datetime import date
 from pathlib import Path
 
 FILENAME_RE = re.compile(
-    r"^(?P<yy>\d{2})\.(?P<mm>\d{2})\.(?P<dd>\d{2})"
+    r"^(?P<yy>\d{2})[._](?P<mm>\d{2})[._](?P<dd>\d{2})"
     r"_(?P<aircraft>[^_]+)"
     r"_(?P<pilot>[^_]+)"
     r"(?:_(?P<remarks>.+))?"

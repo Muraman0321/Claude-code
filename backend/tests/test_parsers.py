@@ -35,6 +35,23 @@ def test_parse_filename_invalid():
     assert parse_filename("99.13.01_X_Y.igc") is None  # invalid month
 
 
+def test_parse_filename_underscore_date():
+    meta = parse_filename("26_04_12_JA04KH_Tajima.igc")
+    assert meta is not None
+    assert meta.flight_date == date(2026, 4, 12)
+    assert meta.aircraft == "JA04KH"
+    assert meta.pilot == "Tajima"
+    assert meta.remarks is None
+
+
+def test_parse_filename_remarks_with_underscore():
+    meta = parse_filename("26.04.11_JA2408_Tajima_27_2.igc")
+    assert meta is not None
+    assert meta.aircraft == "JA2408"
+    assert meta.pilot == "Tajima"
+    assert meta.remarks == "27_2"
+
+
 def _synth_igc(num_fixes: int = 60) -> str:
     """Build a tiny synthetic IGC file: takeoff, climb 5 min, glide 5 min."""
     lines = [

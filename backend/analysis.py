@@ -87,8 +87,27 @@ def _smooth(values: list[float], window: int = 5) -> list[float]:
     return out
 
 
+MAX_REAL_CLIMB_MS = 15.0  # physical sanity cap (winch ~25 m/s, but smoothed)
+MAX_REAL_SPEED_KMH = 400.0  # gliders' VNE is ~300 km/h
+
+
+def _altitude_for_climb(fix: Fix) -> int:
+    """Prefer pressure altitude; fall back to GPS altitude if pressure is zero."""
+    return fix.pressure_altitude if fix.pressure_altitude > 0 else fix.gps_altitude
+
+
+def _altitude_for_display(fix: Fix) -> int:
+    """Use GPS altitude when available; fall back to pressure altitude."""
+    return fix.gps_altitude if fix.gps_altitude > 0 else fix.pressure_altitude
+
+
 def compute_fix_metrics(fixes: list[Fix]) -> list[FixMetrics]:
-    """Return per-fix derived metrics, with a 5-sample smoothed climb rate."""
+    """Return per-fix derived metrics, with a smoothed climb rate.
+
+    Uses pressure altitude for vertical speed (GPS altitude is noisy and
+    occasionally drops to 0 when the GPS loses lock). Raw deltas are clipped
+    to physical limits before smoothing.
+    """
     if len(fixes) < 2:
         return []
 
@@ -104,13 +123,22 @@ def compute_fix_metrics(fixes: list[Fix]) -> list[FixMetrics]:
             raw_speed.append(0.0)
             bearings.append(bearings[-1])
             continue
+
         dist_m = haversine_m(prev.latitude, prev.longitude, curr.latitude, curr.longitude)
-        dalt = curr.gps_altitude - prev.gps_altitude
-        raw_climb.append(dalt / dt)
-        raw_speed.append(dist_m / dt * 3.6)
+        speed_kmh = dist_m / dt * 3.6
+        if speed_kmh > MAX_REAL_SPEED_KMH:
+            speed_kmh = 0.0  # GPS jump, ignore this sample
+
+        dalt = _altitude_for_climb(curr) - _altitude_for_climb(prev)
+        climb = dalt / dt
+        if abs(climb) > MAX_REAL_CLIMB_MS:
+            climb = 0.0  # sensor glitch, ignore
+
+        raw_climb.append(climb)
+        raw_speed.append(speed_kmh)
         bearings.append(bearing_deg(prev.latitude, prev.longitude, curr.latitude, curr.longitude))
 
-    climb_smoothed = _smooth(raw_climb, window=5)
+    climb_smoothed = _smooth(raw_climb, window=7)
     speed_smoothed = _smooth(raw_speed, window=5)
 
     return [
@@ -118,7 +146,7 @@ def compute_fix_metrics(fixes: list[Fix]) -> list[FixMetrics]:
             timestamp=fixes[i].timestamp.isoformat(),
             latitude=fixes[i].latitude,
             longitude=fixes[i].longitude,
-            altitude=fixes[i].gps_altitude,
+            altitude=_altitude_for_display(fixes[i]),
             pressure_altitude=fixes[i].pressure_altitude,
             ground_speed_kmh=round(speed_smoothed[i], 2),
             climb_rate_ms=round(climb_smoothed[i], 2),
@@ -214,20 +242,26 @@ def compute_summary(fixes: list[Fix], metrics: list[FixMetrics], thermals: list[
     total_dist_m = 0.0
     altitude_gain = 0.0
     for i in range(1, len(fixes)):
-        total_dist_m += haversine_m(
+        dt = (fixes[i].timestamp - fixes[i - 1].timestamp).total_seconds()
+        seg = haversine_m(
             fixes[i - 1].latitude, fixes[i - 1].longitude,
             fixes[i].latitude, fixes[i].longitude,
         )
-        dalt = fixes[i].gps_altitude - fixes[i - 1].gps_altitude
-        if dalt > 0:
-            altitude_gain += dalt
+        # Skip GPS-jump segments when accumulating distance.
+        if dt > 0 and seg / dt * 3.6 <= MAX_REAL_SPEED_KMH:
+            total_dist_m += seg
+        # Use the smoothed/clipped climb to sum altitude gain.
+        if dt > 0 and metrics[i].climb_rate_ms > 0:
+            altitude_gain += metrics[i].climb_rate_ms * dt
 
     straight_dist_m = haversine_m(
         fixes[0].latitude, fixes[0].longitude,
         fixes[-1].latitude, fixes[-1].longitude,
     )
 
-    altitudes = [f.gps_altitude for f in fixes]
+    altitudes = [_altitude_for_display(f) for f in fixes if _altitude_for_display(f) > 0]
+    if not altitudes:
+        altitudes = [0]
     speeds = [m.ground_speed_kmh for m in metrics]
     climbs = [m.climb_rate_ms for m in metrics]
 
