@@ -72,6 +72,8 @@ class UploadResultOut(BaseModel):
     success: bool
     flight_id: int | None = None
     error: str | None = None
+    normalized_from: str | None = None  # original name if the parser had to repair it
+    normalization_notes: list[str] = []
 
 
 class PilotStats(BaseModel):

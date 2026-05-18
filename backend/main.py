@@ -17,7 +17,7 @@ import analysis
 import igc_parser
 import weather as weather_svc
 from database import SessionLocal, init_db
-from filename_parser import parse_filename
+from filename_parser import normalize_filename, parse_filename, parse_or_normalize
 from models import Flight, GpsFix, ThermalRecord
 from schemas import (
     AircraftStats,
@@ -63,13 +63,24 @@ def get_db():
 
 
 def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
-    meta = parse_filename(filename)
+    meta, final_name, notes = parse_or_normalize(filename)
+    normalized_from = filename if final_name != filename else None
     if not meta:
-        return UploadResultOut(filename=filename, success=False, error="filename does not match yy.mm.dd_<aircraft>_<pilot>_<remarks>.igc")
+        return UploadResultOut(
+            filename=final_name,
+            success=False,
+            error=f"filename does not match yy.mm.dd_<aircraft>_<pilot>_<remarks>.igc (tried: {final_name!r})",
+            normalized_from=normalized_from,
+            normalization_notes=notes,
+        )
+    filename = final_name  # use the normalized form for storage
 
     igc = igc_parser.parse_igc_bytes(content)
     if not igc.fixes:
-        return UploadResultOut(filename=filename, success=False, error="no B records (GPS fixes) found")
+        return UploadResultOut(
+            filename=filename, success=False, error="no B records (GPS fixes) found",
+            normalized_from=normalized_from, normalization_notes=notes,
+        )
 
     metrics = analysis.compute_fix_metrics(igc.fixes)
     thermals = analysis.detect_thermals(igc.fixes, metrics)
@@ -155,7 +166,10 @@ def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
     db.add(flight)
     db.commit()
     db.refresh(flight)
-    return UploadResultOut(filename=filename, success=True, flight_id=flight.id)
+    return UploadResultOut(
+        filename=filename, success=True, flight_id=flight.id,
+        normalized_from=normalized_from, normalization_notes=notes,
+    )
 
 
 @app.post("/api/upload", response_model=list[UploadResultOut])
@@ -640,6 +654,30 @@ def flight_tracks(
             points=points,
         ))
     return out
+
+
+@app.get("/api/normalize-filename")
+def api_normalize_filename(name: str):
+    """Dry-run filename normalization so the UI can preview before upload."""
+    normalized, notes = normalize_filename(name)
+    parsed = parse_filename(normalized)
+    return {
+        "original": name,
+        "normalized": normalized,
+        "changed": normalized != name,
+        "notes": notes,
+        "valid": parsed is not None,
+        "parsed": (
+            {
+                "flight_date": parsed.flight_date.isoformat(),
+                "aircraft": parsed.aircraft,
+                "pilot": parsed.pilot,
+                "remarks": parsed.remarks,
+            }
+            if parsed
+            else None
+        ),
+    }
 
 
 @app.get("/api/health")

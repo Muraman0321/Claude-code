@@ -61,6 +61,8 @@ export interface UploadResult {
   success: boolean;
   flight_id: number | null;
   error: string | null;
+  normalized_from?: string | null;
+  normalization_notes?: string[];
 }
 
 export interface PilotStats {

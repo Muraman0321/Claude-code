@@ -63,10 +63,18 @@ export function FileUpload({ onDone }: { onDone: () => void }) {
       </div>
       {results.length > 0 && (
         <div className="upload-results">
-          {results.map((r) => (
-            <div key={r.filename} className={r.success ? "ok" : "fail"}>
-              {r.success ? "✓" : "✗"} {r.filename}
+          {results.map((r, i) => (
+            <div key={`${r.filename}_${i}`} className={r.success ? "ok" : "fail"} style={{ marginBottom: "0.35rem" }}>
+              {r.success ? "✓" : "✗"} <code>{r.filename}</code>
               {r.error && <span> — {r.error}</span>}
+              {r.normalized_from && (
+                <div style={{ fontSize: "0.78rem", color: "#9a6700", marginLeft: "1.2rem" }}>
+                  ↺ 元: <code>{r.normalized_from}</code>
+                  {r.normalization_notes && r.normalization_notes.length > 0 && (
+                    <> ({r.normalization_notes.join(" / ")})</>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

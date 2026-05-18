@@ -52,6 +52,110 @@ def test_parse_filename_remarks_with_underscore():
     assert meta.remarks == "27_2"
 
 
+def test_normalize_extension_case():
+    from filename_parser import normalize_filename
+    name, notes = normalize_filename("26.04.11_JA04KH_shin.IGC")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert any("拡張子" in n for n in notes)
+
+
+def test_normalize_four_digit_year():
+    from filename_parser import normalize_filename, parse_filename
+    name, notes = normalize_filename("2026.04.11_JA04KH_shin.igc")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_dash_date_separators():
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("26-04-11_JA04KH_shin.igc")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_slash_date_separators():
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("26/04/11_JA04KH_shin.igc")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_single_digit_month_day():
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("26.4.5_JA04KH_shin.igc")
+    assert name == "26.04.05_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_no_date_separator():
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("260411_JA04KH_shin.igc")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_eight_digit_date():
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("20260411_JA04KH_shin.igc")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_space_separators():
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("26.04.11 JA04KH shin.igc")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_dash_field_separators():
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("26.04.11-JA04KH-shin.igc")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_doubled_separators():
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("26.04.11__JA04KH__shin.igc")
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+
+
+def test_normalize_combined_mess():
+    from filename_parser import normalize_filename, parse_filename
+    name, notes = normalize_filename("  2026-4-5 JA04KH-shin .IGC ")
+    assert name == "26.04.05_JA04KH_shin.igc"
+    assert parse_filename(name) is not None
+    assert len(notes) >= 2  # multiple things changed
+
+
+def test_normalize_preserves_remarks_with_dots():
+    """Decimals inside remarks like `27.5` must NOT be turned into separators."""
+    from filename_parser import normalize_filename, parse_filename
+    name, _ = normalize_filename("26.04.11_JA04KH_shin_27.5.igc")
+    parsed = parse_filename(name)
+    assert parsed is not None
+    assert parsed.remarks == "27.5"
+
+
+def test_normalize_already_canonical_is_noop():
+    from filename_parser import normalize_filename
+    name, notes = normalize_filename("26.04.11_JA04KH_shin_27_2.igc")
+    assert name == "26.04.11_JA04KH_shin_27_2.igc"
+    assert notes == []
+
+
+def test_parse_or_normalize_falls_back():
+    from filename_parser import parse_or_normalize
+    parsed, name, notes = parse_or_normalize("2026-04-11 JA04KH-shin.IGC")
+    assert parsed is not None
+    assert parsed.aircraft == "JA04KH"
+    assert parsed.pilot == "shin"
+    assert name == "26.04.11_JA04KH_shin.igc"
+    assert notes
+
+
 def _synth_igc(num_fixes: int = 60) -> str:
     """Build a tiny synthetic IGC file: takeoff, climb 5 min, glide 5 min."""
     lines = [
