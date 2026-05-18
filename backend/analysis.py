@@ -222,16 +222,61 @@ def compute_fix_metrics(fixes: list[Fix]) -> list[FixMetrics]:
     ]
 
 
+def _tow_release_index(fixes: list[Fix], metrics: list[FixMetrics], min_gain_m: float = 50.0) -> int:
+    """Return the first index after the initial tow climb ends.
+
+    Looks for the first moment where the aircraft has gained at least
+    min_gain_m from its takeoff altitude AND starts descending — this
+    typically coincides with winch or aerotow release.
+
+    Falls back to the end of the very first climb segment if no clear
+    descent is found after the altitude gain.
+    """
+    if not fixes or not metrics:
+        return 0
+
+    # Takeoff = first fix where ground speed exceeds 15 km/h.
+    move_start = next(
+        (i for i, m in enumerate(metrics) if m.ground_speed_kmh > 15), 0
+    )
+    takeoff_alt = _altitude_for_display(fixes[move_start])
+    peak_alt = takeoff_alt
+
+    for i in range(move_start, len(metrics)):
+        alt = _altitude_for_display(fixes[i])
+        if alt > peak_alt:
+            peak_alt = alt
+        if peak_alt - takeoff_alt >= min_gain_m and metrics[i].climb_rate_ms < 0:
+            return i
+
+    # No clear release found: skip to end of the first climb segment.
+    in_climb = False
+    for i in range(move_start, len(metrics)):
+        if metrics[i].climb_rate_ms > 0.1:
+            in_climb = True
+        elif in_climb:
+            return i
+
+    return move_start
+
+
 def detect_thermals(
     fixes: list[Fix],
     metrics: list[FixMetrics],
     min_duration_s: float = 20.0,
     min_avg_climb_ms: float = 0.3,
 ) -> list[Thermal]:
-    """Detect thermal segments: contiguous fixes with positive smoothed climb."""
+    """Detect thermal segments: contiguous fixes with positive smoothed climb.
+
+    The initial tow climb (winch or aerotow) is excluded automatically:
+    any climb segment that starts before the estimated tow-release point
+    (see _tow_release_index) is not counted as a thermal.
+    """
     thermals: list[Thermal] = []
     if not fixes or not metrics:
         return thermals
+
+    tow_end = _tow_release_index(fixes, metrics)
 
     start: int | None = None
     for i, m in enumerate(metrics):
@@ -240,29 +285,30 @@ def detect_thermals(
                 start = i
         else:
             if start is not None and i - start > 2:
-                segment = metrics[start:i]
-                duration = (fixes[i - 1].timestamp - fixes[start].timestamp).total_seconds()
-                if duration >= min_duration_s:
-                    avg_climb = sum(s.climb_rate_ms for s in segment) / len(segment)
-                    gain = fixes[i - 1].gps_altitude - fixes[start].gps_altitude
-                    if avg_climb >= min_avg_climb_ms and gain > 5:
-                        thermals.append(
-                            Thermal(
-                                start_index=start,
-                                end_index=i - 1,
-                                start_time=fixes[start].timestamp.isoformat(),
-                                end_time=fixes[i - 1].timestamp.isoformat(),
-                                duration_s=duration,
-                                altitude_gain_m=gain,
-                                avg_climb_rate_ms=round(avg_climb, 2),
-                                center_lat=sum(f.latitude for f in fixes[start:i]) / (i - start),
-                                center_lon=sum(f.longitude for f in fixes[start:i]) / (i - start),
-                                start_lat=fixes[start].latitude,
-                                start_lon=fixes[start].longitude,
-                                end_lat=fixes[i - 1].latitude,
-                                end_lon=fixes[i - 1].longitude,
+                if start >= tow_end:  # skip segments inside the tow phase
+                    segment = metrics[start:i]
+                    duration = (fixes[i - 1].timestamp - fixes[start].timestamp).total_seconds()
+                    if duration >= min_duration_s:
+                        avg_climb = sum(s.climb_rate_ms for s in segment) / len(segment)
+                        gain = fixes[i - 1].gps_altitude - fixes[start].gps_altitude
+                        if avg_climb >= min_avg_climb_ms and gain > 5:
+                            thermals.append(
+                                Thermal(
+                                    start_index=start,
+                                    end_index=i - 1,
+                                    start_time=fixes[start].timestamp.isoformat(),
+                                    end_time=fixes[i - 1].timestamp.isoformat(),
+                                    duration_s=duration,
+                                    altitude_gain_m=gain,
+                                    avg_climb_rate_ms=round(avg_climb, 2),
+                                    center_lat=sum(f.latitude for f in fixes[start:i]) / (i - start),
+                                    center_lon=sum(f.longitude for f in fixes[start:i]) / (i - start),
+                                    start_lat=fixes[start].latitude,
+                                    start_lon=fixes[start].longitude,
+                                    end_lat=fixes[i - 1].latitude,
+                                    end_lon=fixes[i - 1].longitude,
+                                )
                             )
-                        )
             start = None
 
     return thermals

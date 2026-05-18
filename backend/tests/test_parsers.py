@@ -189,7 +189,18 @@ def test_parse_or_normalize_falls_back():
 
 
 def _synth_igc(num_fixes: int = 60) -> str:
-    """Build a tiny synthetic IGC file: takeoff, climb 5 min, glide 5 min."""
+    """Build a synthetic IGC with realistic launch phases.
+
+    Phase layout (each fix = 10 s):
+      i 0-4   : ground roll — horizontal movement, no altitude change
+      i 5-24  : winch climb — 3 m/s up, no horizontal movement
+      i 25-29 : release — 1 m/s descent
+      i 30-49 : free thermal — 1 m/s up, no horizontal movement
+      i 50+   : glide — 0.8 m/s descent, moving east
+
+    The tow-exclusion logic in detect_thermals should skip the winch climb
+    and count only the free thermal (and any subsequent ones) as thermals.
+    """
     lines = [
         "AXXX",
         "HFDTE110426",
@@ -197,23 +208,28 @@ def _synth_igc(num_fixes: int = 60) -> str:
         "HFGTYGLIDERTYPE:ASW28",
         "HFGIDGLIDERID:JA04KH",
     ]
-    # Start at 36.0N, 138.0E, climb at 2 m/s for first half, descend at 1 m/s rest
     lat_deg, lat_min = 36, 0.0
     lon_deg, lon_min = 138, 0.0
-    alt = 500
+    alt = 100  # ground level (m)
     for i in range(num_fixes):
-        hh = 10
         total_sec = i * 10
+        hh = 10
         mm = (total_sec // 60) % 60
         ss = total_sec % 60
-        # Climb phase first half, glide second half
-        if i < num_fixes // 2:
-            alt += 20  # 2 m/s over 10 s
+        if i < 5:
+            lon_min += 0.28     # ~100 km/h ground roll, no altitude change
+        elif i < 25:
+            alt += 30           # winch: 3 m/s for 20 fixes → +600 m
+        elif i < 30:
+            alt -= 10           # release descent
+        elif i < 50:
+            alt += 10           # free thermal: 1 m/s for 20 fixes → +200 m
         else:
-            alt -= 10  # 1 m/s descent
-            lon_min += 0.05  # move east while gliding
-        lat_str = f"{lat_deg:02d}{int(lat_min*1000):05d}N"
-        lon_str = f"{lon_deg:03d}{int(lon_min*1000):05d}E"
+            alt -= 8            # glide descent
+            lon_min += 0.10     # move east while gliding
+        alt = max(alt, 50)
+        lat_str = f"{lat_deg:02d}{int(lat_min * 1000):05d}N"
+        lon_str = f"{lon_deg:03d}{int(lon_min * 1000):05d}E"
         pa = max(0, alt - 50)
         ga = max(0, alt)
         lines.append(f"B{hh:02d}{mm:02d}{ss:02d}{lat_str}{lon_str}A{pa:05d}{ga:05d}")
@@ -228,7 +244,7 @@ def test_igc_parser_reads_headers_and_fixes():
     assert igc.aircraft_type == "ASW28"
     assert igc.aircraft_id == "JA04KH"
     assert len(igc.fixes) == 60
-    assert igc.fixes[0].gps_altitude == 520  # 500 + 20 on first iteration
+    assert igc.fixes[0].gps_altitude == 100  # ground level at start
 
 
 def test_analysis_detects_climb_and_glide():
@@ -244,6 +260,27 @@ def test_analysis_detects_climb_and_glide():
     assert summary.altitude_gain_m > 0
     # Glide section should yield a measurable best L/D.
     assert summary.best_glide_ratio > 0
+
+
+def test_tow_climb_excluded_from_thermals():
+    """The winch/aerotow climb must not appear in the thermal list."""
+    text = _synth_igc(num_fixes=120)
+    igc = igc_parser.parse_igc_bytes(text.encode("latin-1"))
+    metrics = analysis.compute_fix_metrics(igc.fixes)
+    thermals = analysis.detect_thermals(igc.fixes, metrics)
+
+    # The free thermal starts at ~fix 30 (after release at fix 25).
+    # All detected thermals must start well after the winch phase.
+    # Fix 25 corresponds to 250 s from t=0 (10 s/fix × 25).
+    tow_cutoff = igc.fixes[25].timestamp
+    for t in thermals:
+        from datetime import datetime, timezone
+        t_start = datetime.fromisoformat(t.start_time)
+        if t_start.tzinfo is None:
+            t_start = t_start.replace(tzinfo=timezone.utc)
+        assert t_start >= tow_cutoff, (
+            f"Thermal at {t_start} starts before tow release at {tow_cutoff}"
+        )
 
 
 def test_weather_picks_nearest_hour(monkeypatch):
