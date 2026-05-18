@@ -70,7 +70,33 @@ def _add_missing_columns() -> None:
                     conn.execute(text(f"ALTER TABLE thermals ADD COLUMN {name} {sql_type}"))
 
 
+def _uppercase_pilot_aircraft() -> None:
+    """One-time data normalization: uppercase pilot and aircraft strings
+    so they match the new semantic parser convention (CAPITAL LETTER).
+
+    Idempotent: rows already uppercase are skipped.
+    """
+    from sqlalchemy import func
+    from models import Flight
+
+    inspector = inspect(engine)
+    if "flights" not in inspector.get_table_names():
+        return
+    with SessionLocal() as db:
+        rows = db.query(Flight).filter(
+            (Flight.pilot != func.upper(Flight.pilot))
+            | (Flight.aircraft != func.upper(Flight.aircraft))
+        ).all()
+        if not rows:
+            return
+        for r in rows:
+            r.pilot = (r.pilot or "").upper()
+            r.aircraft = (r.aircraft or "").upper()
+        db.commit()
+
+
 def init_db() -> None:
     from models import Flight, GpsFix, ThermalRecord  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _add_missing_columns()
+    _uppercase_pilot_aircraft()

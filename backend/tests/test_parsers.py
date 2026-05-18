@@ -17,7 +17,7 @@ def test_parse_filename_basic():
     assert meta is not None
     assert meta.flight_date == date(2026, 4, 11)
     assert meta.aircraft == "JA04KH"
-    assert meta.pilot == "shin"
+    assert meta.pilot == "SHIN"
     assert meta.remarks == "27*3"
 
 
@@ -26,13 +26,13 @@ def test_parse_filename_no_remarks():
     assert meta is not None
     assert meta.flight_date == date(2024, 5, 1)
     assert meta.aircraft == "JA12AB"
-    assert meta.pilot == "Yamada"
+    assert meta.pilot == "YAMADA"
     assert meta.remarks is None
 
 
 def test_parse_filename_invalid():
     assert parse_filename("flight.igc") is None
-    assert parse_filename("99.13.01_X_Y.igc") is None  # invalid month
+    assert parse_filename("99.13.01_JA01_PILOT.igc") is None  # invalid month
 
 
 def test_parse_filename_underscore_date():
@@ -40,7 +40,7 @@ def test_parse_filename_underscore_date():
     assert meta is not None
     assert meta.flight_date == date(2026, 4, 12)
     assert meta.aircraft == "JA04KH"
-    assert meta.pilot == "Tajima"
+    assert meta.pilot == "TAJIMA"
     assert meta.remarks is None
 
 
@@ -48,86 +48,118 @@ def test_parse_filename_remarks_with_underscore():
     meta = parse_filename("26.04.11_JA2408_Tajima_27_2.igc")
     assert meta is not None
     assert meta.aircraft == "JA2408"
-    assert meta.pilot == "Tajima"
+    assert meta.pilot == "TAJIMA"
     assert meta.remarks == "27_2"
+
+
+def test_parse_filename_order_independent_pilot_first():
+    """JA block can appear anywhere — pilot/aircraft are detected semantically."""
+    meta = parse_filename("26.04.11_TAJIMA_JA04KH.igc")
+    assert meta is not None
+    assert meta.aircraft == "JA04KH"
+    assert meta.pilot == "TAJIMA"
+    assert meta.remarks is None
+
+
+def test_parse_filename_extras_become_remarks():
+    """Blocks that are neither JA-prefixed nor purely alphabetic become remarks."""
+    meta = parse_filename("26.04.11_27*3_JA04KH_SHIN.igc")
+    assert meta is not None
+    assert meta.aircraft == "JA04KH"
+    assert meta.pilot == "SHIN"
+    assert meta.remarks == "27*3"
+
+
+def test_parse_filename_uppercases_lowercase_input():
+    """Lowercase pilot/aircraft are normalized to uppercase in the parsed result."""
+    meta = parse_filename("26.04.11_ja04kh_tajima.igc")
+    assert meta is not None
+    assert meta.aircraft == "JA04KH"
+    assert meta.pilot == "TAJIMA"
+
+
+def test_parse_filename_requires_ja_block():
+    """A filename without any JA-prefixed block cannot be parsed."""
+    assert parse_filename("26.04.11_PILOT_REMARK.igc") is None
 
 
 def test_normalize_extension_case():
     from filename_parser import normalize_filename
     name, notes = normalize_filename("26.04.11_JA04KH_shin.IGC")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert any("拡張子" in n for n in notes)
+    assert any("大文字" in n for n in notes)
 
 
 def test_normalize_four_digit_year():
     from filename_parser import normalize_filename, parse_filename
     name, notes = normalize_filename("2026.04.11_JA04KH_shin.igc")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_dash_date_separators():
     from filename_parser import normalize_filename, parse_filename
     name, _ = normalize_filename("26-04-11_JA04KH_shin.igc")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_slash_date_separators():
     from filename_parser import normalize_filename, parse_filename
     name, _ = normalize_filename("26/04/11_JA04KH_shin.igc")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_single_digit_month_day():
     from filename_parser import normalize_filename, parse_filename
     name, _ = normalize_filename("26.4.5_JA04KH_shin.igc")
-    assert name == "26.04.05_JA04KH_shin.igc"
+    assert name == "26.04.05_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_no_date_separator():
     from filename_parser import normalize_filename, parse_filename
     name, _ = normalize_filename("260411_JA04KH_shin.igc")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_eight_digit_date():
     from filename_parser import normalize_filename, parse_filename
     name, _ = normalize_filename("20260411_JA04KH_shin.igc")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_space_separators():
     from filename_parser import normalize_filename, parse_filename
     name, _ = normalize_filename("26.04.11 JA04KH shin.igc")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_dash_field_separators():
     from filename_parser import normalize_filename, parse_filename
     name, _ = normalize_filename("26.04.11-JA04KH-shin.igc")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_doubled_separators():
     from filename_parser import normalize_filename, parse_filename
     name, _ = normalize_filename("26.04.11__JA04KH__shin.igc")
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
 
 
 def test_normalize_combined_mess():
     from filename_parser import normalize_filename, parse_filename
     name, notes = normalize_filename("  2026-4-5 JA04KH-shin .IGC ")
-    assert name == "26.04.05_JA04KH_shin.igc"
+    assert name == "26.04.05_JA04KH_SHIN.igc"
     assert parse_filename(name) is not None
-    assert len(notes) >= 2  # multiple things changed
+    assert len(notes) >= 2
 
 
 def test_normalize_preserves_remarks_with_dots():
@@ -141,8 +173,8 @@ def test_normalize_preserves_remarks_with_dots():
 
 def test_normalize_already_canonical_is_noop():
     from filename_parser import normalize_filename
-    name, notes = normalize_filename("26.04.11_JA04KH_shin_27_2.igc")
-    assert name == "26.04.11_JA04KH_shin_27_2.igc"
+    name, notes = normalize_filename("26.04.11_JA04KH_SHIN_27_2.igc")
+    assert name == "26.04.11_JA04KH_SHIN_27_2.igc"
     assert notes == []
 
 
@@ -151,8 +183,8 @@ def test_parse_or_normalize_falls_back():
     parsed, name, notes = parse_or_normalize("2026-04-11 JA04KH-shin.IGC")
     assert parsed is not None
     assert parsed.aircraft == "JA04KH"
-    assert parsed.pilot == "shin"
-    assert name == "26.04.11_JA04KH_shin.igc"
+    assert parsed.pilot == "SHIN"
+    assert name == "26.04.11_JA04KH_SHIN.igc"
     assert notes
 
 

@@ -95,7 +95,10 @@ def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
 
     existing = (
         db.query(Flight)
-        .filter(Flight.filename == filename, Flight.pilot == meta.pilot)
+        .filter(
+            func.upper(Flight.filename) == filename.upper(),
+            func.upper(Flight.pilot) == meta.pilot.upper(),
+        )
         .one_or_none()
     )
     if existing:
