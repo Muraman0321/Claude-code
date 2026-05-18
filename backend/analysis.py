@@ -116,6 +116,10 @@ class Thermal:
     avg_climb_rate_ms: float
     center_lat: float
     center_lon: float
+    start_lat: float = 0.0
+    start_lon: float = 0.0
+    end_lat: float = 0.0
+    end_lon: float = 0.0
 
 
 @dataclass
@@ -221,8 +225,8 @@ def compute_fix_metrics(fixes: list[Fix]) -> list[FixMetrics]:
 def detect_thermals(
     fixes: list[Fix],
     metrics: list[FixMetrics],
-    min_duration_s: float = 30.0,
-    min_avg_climb_ms: float = 0.5,
+    min_duration_s: float = 20.0,
+    min_avg_climb_ms: float = 0.3,
 ) -> list[Thermal]:
     """Detect thermal segments: contiguous fixes with positive smoothed climb."""
     thermals: list[Thermal] = []
@@ -231,7 +235,7 @@ def detect_thermals(
 
     start: int | None = None
     for i, m in enumerate(metrics):
-        if m.climb_rate_ms > 0.2:
+        if m.climb_rate_ms > 0.1:
             if start is None:
                 start = i
         else:
@@ -241,7 +245,7 @@ def detect_thermals(
                 if duration >= min_duration_s:
                     avg_climb = sum(s.climb_rate_ms for s in segment) / len(segment)
                     gain = fixes[i - 1].gps_altitude - fixes[start].gps_altitude
-                    if avg_climb >= min_avg_climb_ms and gain > 10:
+                    if avg_climb >= min_avg_climb_ms and gain > 5:
                         thermals.append(
                             Thermal(
                                 start_index=start,
@@ -253,6 +257,10 @@ def detect_thermals(
                                 avg_climb_rate_ms=round(avg_climb, 2),
                                 center_lat=sum(f.latitude for f in fixes[start:i]) / (i - start),
                                 center_lon=sum(f.longitude for f in fixes[start:i]) / (i - start),
+                                start_lat=fixes[start].latitude,
+                                start_lon=fixes[start].longitude,
+                                end_lat=fixes[i - 1].latitude,
+                                end_lon=fixes[i - 1].longitude,
                             )
                         )
             start = None

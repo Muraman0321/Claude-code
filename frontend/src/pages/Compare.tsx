@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { MapContainer, Polyline, TileLayer, Tooltip } from "react-leaflet";
+import { Circle, MapContainer, Polygon, Polyline, TileLayer, Tooltip } from "react-leaflet";
 import { api } from "../api/client";
 import { CompareBarChart } from "../components/Charts";
-import type { FlightSummary, FlightTrack } from "../types";
+import type { FlightSummary, FlightTrack, ThermalLight } from "../types";
 import { fmtDate, fmtDuration, fmtNum } from "../utils/format";
 
 type SortKey =
@@ -44,6 +44,50 @@ const COLORS = [
 
 const MAX_SELECTED = 100;
 
+// Compute a geodesic capsule polygon from start→end with the given radius (meters).
+// Returns a closed [lat, lon] ring approximating a stadium shape.
+function capsulePolygon(
+  sLat: number, sLon: number,
+  eLat: number, eLon: number,
+  radiusM: number,
+  arcSteps = 8,
+): [number, number][] {
+  const R = 6_371_000;
+  function offsetPt(lat: number, lon: number, brg: number, dist: number): [number, number] {
+    const d = dist / R;
+    const φ = lat * Math.PI / 180;
+    const λ = lon * Math.PI / 180;
+    const θ = ((brg % 360) + 360) % 360 * Math.PI / 180;
+    const φ2 = Math.asin(Math.sin(φ) * Math.cos(d) + Math.cos(φ) * Math.sin(d) * Math.cos(θ));
+    const λ2 = λ + Math.atan2(Math.sin(θ) * Math.sin(d) * Math.cos(φ), Math.cos(d) - Math.sin(φ) * Math.sin(φ2));
+    return [φ2 * 180 / Math.PI, λ2 * 180 / Math.PI];
+  }
+
+  // Bearing from start to end
+  const φ1 = sLat * Math.PI / 180, φ2 = eLat * Math.PI / 180;
+  const dλ = (eLon - sLon) * Math.PI / 180;
+  const y = Math.sin(dλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(dλ);
+  const fwd = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+
+  const pts: [number, number][] = [];
+  // End cap: sweep from fwd+90 to fwd+270 (through the far side)
+  for (let i = 0; i <= arcSteps; i++) {
+    pts.push(offsetPt(eLat, eLon, fwd + 90 + 180 * i / arcSteps, radiusM));
+  }
+  // Start cap: sweep from fwd+270 to fwd+450 (= fwd+90, through the near side)
+  for (let i = 0; i <= arcSteps; i++) {
+    pts.push(offsetPt(sLat, sLon, fwd + 270 + 180 * i / arcSteps, radiusM));
+  }
+  pts.push(pts[0]);
+  return pts;
+}
+
+function hourDist(a: number, b: number): number {
+  const d = Math.abs(a - b) % 24;
+  return d > 12 ? 24 - d : d;
+}
+
 export default function Compare() {
   const [flights, setFlights] = useState<FlightSummary[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -54,6 +98,10 @@ export default function Compare() {
   const [showMap, setShowMap] = useState(false);
   const [tracks, setTracks] = useState<FlightTrack[]>([]);
   const [loadingTracks, setLoadingTracks] = useState(false);
+  const [thermals, setThermals] = useState<ThermalLight[]>([]);
+  const [showThermals, setShowThermals] = useState(true);
+  const [thermalMode, setThermalMode] = useState<"circle" | "stadium">("circle");
+  const [filterHour, setFilterHour] = useState<number | null>(null);
 
   useEffect(() => {
     api.listFlights().then(setFlights).catch(console.error);
@@ -126,10 +174,34 @@ export default function Compare() {
     }
   }
 
+  async function loadThermals() {
+    if (selectedFlights.length === 0) {
+      setThermals([]);
+      return;
+    }
+    try {
+      const t = await api.thermals(selectedFlights.map((f) => f.id));
+      setThermals(t);
+    } catch {
+      setThermals([]);
+    }
+  }
+
+  const flightIdKey = selectedFlights.map((f) => f.id).join(",");
+
   useEffect(() => {
-    if (showMap) loadTracks().catch(console.error);
+    if (showMap) {
+      loadTracks().catch(console.error);
+      loadThermals().catch(console.error);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showMap, selectedFlights.map((f) => f.id).join(",")]);
+  }, [showMap, flightIdKey]);
+
+  const visibleThermals = useMemo(() => {
+    if (!showThermals) return [];
+    if (filterHour == null) return thermals;
+    return thermals.filter((t) => hourDist(t.local_hour, filterHour) <= 1);
+  }, [thermals, showThermals, filterHour]);
 
   const mapCenter = useMemo<[number, number]>(() => {
     const pts = tracks.flatMap((t) => t.points);
@@ -235,6 +307,63 @@ export default function Compare() {
                 マップに描画 ({selectedFlights.length}件)
               </label>
             </h2>
+            {showMap && (
+              <div style={{ marginBottom: "0.75rem", display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "center", fontSize: "0.88rem" }}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={showThermals}
+                    onChange={(e) => setShowThermals(e.target.checked)}
+                    style={{ marginRight: "0.3rem" }}
+                  />
+                  サーマル表示
+                </label>
+                {showThermals && (
+                  <>
+                    <span>
+                      形状:{" "}
+                      <select
+                        value={thermalMode}
+                        onChange={(e) => setThermalMode(e.target.value as "circle" | "stadium")}
+                        style={{ fontSize: "0.88rem" }}
+                      >
+                        <option value="circle">円</option>
+                        <option value="stadium">カプセル (開始→終了)</option>
+                      </select>
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={filterHour == null}
+                          onChange={(e) => setFilterHour(e.target.checked ? null : 12)}
+                          style={{ marginRight: "0.3rem" }}
+                        />
+                        全時間
+                      </label>
+                      {filterHour != null && (
+                        <>
+                          <input
+                            type="range"
+                            min={0}
+                            max={23}
+                            value={filterHour}
+                            onChange={(e) => setFilterHour(Number(e.target.value))}
+                            style={{ width: "120px" }}
+                          />
+                          <span style={{ minWidth: "80px" }}>
+                            {filterHour.toString().padStart(2, "0")}:00台 ±1h
+                          </span>
+                        </>
+                      )}
+                      <span style={{ color: "#57606a" }}>
+                        ({visibleThermals.length}/{thermals.length} 件)
+                      </span>
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
             {showMap ? (
               loadingTracks ? (
                 <div className="empty">トラック取得中...</div>
@@ -258,6 +387,54 @@ export default function Compare() {
                         </Tooltip>
                       </Polyline>
                     ))}
+                    {visibleThermals.map((t, i) => {
+                      const radius = Math.max(100, 200 * t.avg_climb_rate_ms);
+                      const style = {
+                        color: "#c00",
+                        fillColor: "#e33",
+                        fillOpacity: 0.25,
+                        weight: 1,
+                      };
+                      const tip = (
+                        <Tooltip>
+                          {t.pilot} / {t.aircraft}
+                          <br />
+                          上昇率 {t.avg_climb_rate_ms.toFixed(2)} m/s
+                          <br />
+                          高度獲得 {t.altitude_gain_m.toFixed(0)} m
+                          <br />
+                          現地 {t.local_hour.toString().padStart(2, "0")}:00台
+                        </Tooltip>
+                      );
+
+                      if (
+                        thermalMode === "stadium" &&
+                        t.start_lat != null && t.start_lon != null &&
+                        t.end_lat != null && t.end_lon != null
+                      ) {
+                        const poly = capsulePolygon(
+                          t.start_lat, t.start_lon,
+                          t.end_lat, t.end_lon,
+                          radius,
+                        );
+                        return (
+                          <Polygon key={i} positions={poly} pathOptions={style}>
+                            {tip}
+                          </Polygon>
+                        );
+                      }
+
+                      return (
+                        <Circle
+                          key={i}
+                          center={[t.center_lat, t.center_lon]}
+                          radius={radius}
+                          pathOptions={style}
+                        >
+                          {tip}
+                        </Circle>
+                      );
+                    })}
                   </MapContainer>
                 </div>
               )

@@ -33,6 +33,7 @@ from schemas import (
     HourCell,
     PilotStats,
     SeasonBucket,
+    ThermalLight,
     ThermalOut,
     TimeOfDayBucket,
     TrackPoint,
@@ -163,6 +164,10 @@ def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
                 avg_climb_rate_ms=t.avg_climb_rate_ms,
                 center_lat=t.center_lat,
                 center_lon=t.center_lon,
+                start_lat=t.start_lat,
+                start_lon=t.start_lon,
+                end_lat=t.end_lat,
+                end_lon=t.end_lon,
             )
         )
 
@@ -560,40 +565,81 @@ def _local_hour(thermal_start, longitude: float) -> int:
     return (thermal_start.hour + offset) % 24
 
 
+@app.get("/api/thermals", response_model=list[ThermalLight])
+def flight_thermals(
+    ids: str,
+    db: Session = Depends(get_db),
+):
+    """Return thermal records for a set of flight IDs (used by compare-map overlay)."""
+    flight_ids = [int(x) for x in ids.split(",") if x.strip().lstrip("-").isdigit()]
+    if not flight_ids:
+        return []
+    rows = (
+        db.query(ThermalRecord, Flight)
+        .join(Flight, ThermalRecord.flight_id == Flight.id)
+        .filter(ThermalRecord.flight_id.in_(flight_ids))
+        .all()
+    )
+    result: list[ThermalLight] = []
+    for t, flight in rows:
+        local_hour = _local_hour(t.start_time, flight.start_longitude or MENUMA_LON)
+        result.append(ThermalLight(
+            flight_id=flight.id,
+            pilot=flight.pilot,
+            aircraft=flight.aircraft,
+            center_lat=t.center_lat,
+            center_lon=t.center_lon,
+            avg_climb_rate_ms=t.avg_climb_rate_ms,
+            altitude_gain_m=t.altitude_gain_m,
+            duration_s=t.duration_s,
+            start_time=t.start_time,
+            local_hour=local_hour,
+            start_lat=t.start_lat,
+            start_lon=t.start_lon,
+            end_lat=t.end_lat,
+            end_lon=t.end_lon,
+        ))
+    return result
+
+
 @app.get("/api/stats/area/sectors", response_model=AreaStats)
 def stats_area_sectors(
     center_lat: float = MENUMA_LAT,
     center_lon: float = MENUMA_LON,
     radius_km: float = 9.0,
+    n_sectors: int = 9,
     db: Session = Depends(get_db),
 ):
-    """Divide a circle around the center into 9 wedges of 40° each.
+    """Divide a circle around the center into n_sectors wedges.
 
-    For each wedge, report thermal stats (count, avg/max climb rate,
-    avg altitude gain) and an hour-of-day breakdown of average climb.
+    n_sectors: number of equal wedges (4, 6, 8, 9, 12, 16, 24).
+    For each wedge, report thermal stats and an hour-of-day breakdown.
     """
+    n = max(4, min(36, n_sectors))
+    sector_deg = 360.0 / n
+
     rows = (
         db.query(ThermalRecord, Flight)
         .join(Flight, ThermalRecord.flight_id == Flight.id)
         .all()
     )
 
-    grouped: list[list[ThermalRecord]] = [[] for _ in range(9)]
-    by_hour_per_sector: list[dict[int, list[float]]] = [{} for _ in range(9)]
+    grouped: list[list[ThermalRecord]] = [[] for _ in range(n)]
+    by_hour_per_sector: list[dict[int, list[float]]] = [{} for _ in range(n)]
     for t, flight in rows:
         dist_m = analysis.haversine_m(center_lat, center_lon, t.center_lat, t.center_lon)
         if dist_m > radius_km * 1000:
             continue
         b = analysis.bearing_deg(center_lat, center_lon, t.center_lat, t.center_lon)
-        idx = int(b // 40) % 9
+        idx = int(b // sector_deg) % n
         grouped[idx].append(t)
         hour = _local_hour(t.start_time, flight.start_longitude or center_lon)
         by_hour_per_sector[idx].setdefault(hour, []).append(t.avg_climb_rate_ms)
 
     blocks: list[AreaBlock] = []
-    for i in range(9):
-        bf = i * 40.0
-        bt = (i + 1) * 40.0
+    for i in range(n):
+        bf = i * sector_deg
+        bt = (i + 1) * sector_deg
         polygon = analysis.sector_polygon(center_lat, center_lon, radius_km, bf, bt)
         stats = _block_stats(grouped[i], by_hour_per_sector[i])
         blocks.append(AreaBlock(
@@ -613,23 +659,43 @@ def stats_area_sectors(
     )
 
 
+def _grid_label(dx: int, dy: int, half: int) -> str:
+    """Human-readable label for a grid cell.
+
+    3×3: compass names (NW/N/NE/W/C/E/SW/S/SE).
+    5×5 / 7×7: R{row}C{col} where R1=northernmost, C1=westernmost.
+    """
+    if half == 1:
+        return analysis.GRID_LABELS.get((dx, dy), f"{dx}/{dy}")
+    row = half + 1 - dy
+    col = dx + half + 1
+    return f"R{row}C{col}"
+
+
 @app.get("/api/stats/area/grid", response_model=AreaStats)
 def stats_area_grid(
     center_lat: float = MENUMA_LAT,
     center_lon: float = MENUMA_LON,
     cell_km: float = 6.0,
+    grid_size: int = 3,
     db: Session = Depends(get_db),
 ):
-    """3x3 grid centered on (lat, lon) with each cell `cell_km` square."""
+    """NxN grid (grid_size must be odd: 3, 5, 7) centered on (lat, lon)."""
     import math as _math
+    n = max(3, min(9, grid_size))
+    if n % 2 == 0:
+        n += 1
+    half = n // 2
+
     rows = (
         db.query(ThermalRecord, Flight)
         .join(Flight, ThermalRecord.flight_id == Flight.id)
         .all()
     )
 
-    cells: dict[tuple[int, int], list[ThermalRecord]] = {(x, y): [] for x in (-1, 0, 1) for y in (-1, 0, 1)}
-    by_hour: dict[tuple[int, int], dict[int, list[float]]] = {k: {} for k in cells}
+    coords = [(x, y) for x in range(-half, half + 1) for y in range(-half, half + 1)]
+    cells: dict[tuple[int, int], list[ThermalRecord]] = {k: [] for k in coords}
+    by_hour: dict[tuple[int, int], dict[int, list[float]]] = {k: {} for k in coords}
 
     lat_per_km = 1.0 / 111.0
     lon_per_km = 1.0 / (111.0 * _math.cos(_math.radians(center_lat)) or 1e-9)
@@ -639,13 +705,12 @@ def stats_area_grid(
     for t, flight in rows:
         d_lat = t.center_lat - center_lat
         d_lon = t.center_lon - center_lon
-        # Snap to one of {-1, 0, 1} per axis if within ±1.5 cells.
         ratio_y = d_lat / extent_lat
         ratio_x = d_lon / extent_lon
-        if abs(ratio_x) > 1.5 or abs(ratio_y) > 1.5:
+        if abs(ratio_x) > half + 0.5 or abs(ratio_y) > half + 0.5:
             continue
-        ix = max(-1, min(1, round(ratio_x)))
-        iy = max(-1, min(1, round(ratio_y)))
+        ix = max(-half, min(half, round(ratio_x)))
+        iy = max(-half, min(half, round(ratio_y)))
         cells[(ix, iy)].append(t)
         hour = _local_hour(t.start_time, flight.start_longitude or center_lon)
         by_hour[(ix, iy)].setdefault(hour, []).append(t.avg_climb_rate_ms)
@@ -654,9 +719,9 @@ def stats_area_grid(
     for (dx, dy), records in cells.items():
         polygon = analysis.grid_cell_polygon(center_lat, center_lon, dx, dy, cell_km)
         stats = _block_stats(records, by_hour[(dx, dy)])
-        label = analysis.GRID_LABELS[(dx, dy)]
+        label = _grid_label(dx, dy, half)
         blocks.append(AreaBlock(
-            id=f"cell_{label}",
+            id=f"cell_{dx}_{dy}",
             label=label,
             geometry=polygon,
             **stats,

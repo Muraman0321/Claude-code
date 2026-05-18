@@ -91,5 +91,9 @@ class ThermalRecord(Base):
     avg_climb_rate_ms = Column(Float, nullable=False)
     center_lat = Column(Float, nullable=False)
     center_lon = Column(Float, nullable=False)
+    start_lat = Column(Float, nullable=True)
+    start_lon = Column(Float, nullable=True)
+    end_lat = Column(Float, nullable=True)
+    end_lon = Column(Float, nullable=True)
 
     flight = relationship("Flight", back_populates="thermals")

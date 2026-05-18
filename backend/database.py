@@ -35,10 +35,12 @@ def _add_missing_columns() -> None:
     from models import Flight  # noqa: F401
 
     inspector = inspect(engine)
-    if "flights" not in inspector.get_table_names():
+    tables = set(inspector.get_table_names())
+    if "flights" not in tables:
         return
-    existing = {c["name"] for c in inspector.get_columns("flights")}
-    additions = {
+
+    existing_flights = {c["name"] for c in inspector.get_columns("flights")}
+    flight_additions = {
         "start_latitude": "REAL",
         "start_longitude": "REAL",
         "weather_temp_c": "REAL",
@@ -50,9 +52,22 @@ def _add_missing_columns() -> None:
         "weather_source": "VARCHAR",
     }
     with engine.begin() as conn:
-        for name, sql_type in additions.items():
-            if name not in existing:
+        for name, sql_type in flight_additions.items():
+            if name not in existing_flights:
                 conn.execute(text(f"ALTER TABLE flights ADD COLUMN {name} {sql_type}"))
+
+    if "thermals" in tables:
+        existing_thermals = {c["name"] for c in inspector.get_columns("thermals")}
+        thermal_additions = {
+            "start_lat": "REAL",
+            "start_lon": "REAL",
+            "end_lat": "REAL",
+            "end_lon": "REAL",
+        }
+        with engine.begin() as conn:
+            for name, sql_type in thermal_additions.items():
+                if name not in existing_thermals:
+                    conn.execute(text(f"ALTER TABLE thermals ADD COLUMN {name} {sql_type}"))
 
 
 def init_db() -> None:

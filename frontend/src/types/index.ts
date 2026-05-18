@@ -139,6 +139,23 @@ export interface FlightTrack {
   points: TrackPoint[];
 }
 
+export interface ThermalLight {
+  flight_id: number;
+  pilot: string;
+  aircraft: string;
+  center_lat: number;
+  center_lon: number;
+  avg_climb_rate_ms: number;
+  altitude_gain_m: number;
+  duration_s: number;
+  start_time: string;
+  local_hour: number;
+  start_lat: number | null;
+  start_lon: number | null;
+  end_lat: number | null;
+  end_lon: number | null;
+}
+
 export interface SeasonBucket {
   season: string; // 春/夏/秋/冬
   season_key: "spring" | "summer" | "autumn" | "winter";

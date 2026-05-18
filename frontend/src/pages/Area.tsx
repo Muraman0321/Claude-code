@@ -36,6 +36,8 @@ export default function Area() {
   const [centerLon, setCenterLon] = useState(MENUMA.lon);
   const [radiusKm, setRadiusKm] = useState(9);
   const [cellKm, setCellKm] = useState(6);
+  const [nSectors, setNSectors] = useState(9);
+  const [gridSize, setGridSize] = useState(3);
   const [data, setData] = useState<AreaStats | null>(null);
   const [selectedBlock, setSelectedBlock] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -45,8 +47,8 @@ export default function Area() {
     try {
       const res =
         mode === "sectors"
-          ? await api.areaSectors({ center_lat: centerLat, center_lon: centerLon, radius_km: radiusKm })
-          : await api.areaGrid({ center_lat: centerLat, center_lon: centerLon, cell_km: cellKm });
+          ? await api.areaSectors({ center_lat: centerLat, center_lon: centerLon, radius_km: radiusKm, n_sectors: nSectors })
+          : await api.areaGrid({ center_lat: centerLat, center_lon: centerLon, cell_km: cellKm, grid_size: gridSize });
       setData(res);
       setSelectedBlock(null);
     } finally {
@@ -57,7 +59,7 @@ export default function Area() {
   useEffect(() => {
     reload().catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, centerLat, centerLon, radiusKm, cellKm]);
+  }, [mode, centerLat, centerLon, radiusKm, cellKm, nSectors, gridSize]);
 
   const maxClimb = useMemo(() => {
     if (!data) return 0;
@@ -78,12 +80,51 @@ export default function Area() {
       <div className="card">
         <div className="filters" style={{ alignItems: "center" }}>
           <span>
-            分割:{" "}
+            モード:{" "}
             <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
-              <option value="sectors">扇状9セクター</option>
-              <option value="grid">3×3グリッド</option>
+              <option value="sectors">扇状セクター</option>
+              <option value="grid">グリッド</option>
             </select>
           </span>
+          {mode === "sectors" ? (
+            <>
+              <span>
+                分割数:{" "}
+                <select value={nSectors} onChange={(e) => setNSectors(Number(e.target.value))}>
+                  {[4, 6, 8, 9, 12, 16, 24].map((n) => (
+                    <option key={n} value={n}>{n}セクター</option>
+                  ))}
+                </select>
+              </span>
+              <span>
+                半径(km):{" "}
+                <input
+                  type="number" step="0.5" value={radiusKm}
+                  onChange={(e) => setRadiusKm(Number(e.target.value))}
+                  style={{ width: "70px" }}
+                />
+              </span>
+            </>
+          ) : (
+            <>
+              <span>
+                サイズ:{" "}
+                <select value={gridSize} onChange={(e) => setGridSize(Number(e.target.value))}>
+                  <option value={3}>3×3</option>
+                  <option value={5}>5×5</option>
+                  <option value={7}>7×7</option>
+                </select>
+              </span>
+              <span>
+                セル(km):{" "}
+                <input
+                  type="number" step="0.5" value={cellKm}
+                  onChange={(e) => setCellKm(Number(e.target.value))}
+                  style={{ width: "70px" }}
+                />
+              </span>
+            </>
+          )}
           <span>
             中心緯度:{" "}
             <input
@@ -100,25 +141,6 @@ export default function Area() {
               style={{ width: "100px" }}
             />
           </span>
-          {mode === "sectors" ? (
-            <span>
-              半径(km):{" "}
-              <input
-                type="number" step="0.5" value={radiusKm}
-                onChange={(e) => setRadiusKm(Number(e.target.value))}
-                style={{ width: "70px" }}
-              />
-            </span>
-          ) : (
-            <span>
-              セル(km):{" "}
-              <input
-                type="number" step="0.5" value={cellKm}
-                onChange={(e) => setCellKm(Number(e.target.value))}
-                style={{ width: "70px" }}
-              />
-            </span>
-          )}
           <button onClick={() => { setCenterLat(MENUMA.lat); setCenterLon(MENUMA.lon); }}>
             妻沼に戻す
           </button>

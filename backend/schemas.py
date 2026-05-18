@@ -162,3 +162,21 @@ class FlightTrack(BaseModel):
     pilot: str
     aircraft: str
     points: list[TrackPoint]
+
+
+class ThermalLight(BaseModel):
+    """Skinny thermal record for the compare-map overlay (no fixes)."""
+    flight_id: int
+    pilot: str
+    aircraft: str
+    center_lat: float
+    center_lon: float
+    avg_climb_rate_ms: float
+    altitude_gain_m: float
+    duration_s: float
+    start_time: datetime
+    local_hour: int  # 0-23 estimated from start longitude
+    start_lat: float | None = None
+    start_lon: float | None = None
+    end_lat: float | None = None
+    end_lon: float | None = None

@@ -6,6 +6,7 @@ import type {
   FlightTrack,
   PilotStats,
   SeasonBucket,
+  ThermalLight,
   TimeOfDayBucket,
   UploadResult,
   WeatherBucket,
@@ -60,13 +61,13 @@ export const api = {
     const q = qs.toString();
     return get<SeasonBucket[]>(`/stats/season${q ? `?${q}` : ""}`);
   },
-  areaSectors: (params: { center_lat?: number; center_lon?: number; radius_km?: number } = {}) => {
+  areaSectors: (params: { center_lat?: number; center_lon?: number; radius_km?: number; n_sectors?: number } = {}) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v != null) qs.set(k, String(v));
     const q = qs.toString();
     return get<AreaStats>(`/stats/area/sectors${q ? `?${q}` : ""}`);
   },
-  areaGrid: (params: { center_lat?: number; center_lon?: number; cell_km?: number } = {}) => {
+  areaGrid: (params: { center_lat?: number; center_lon?: number; cell_km?: number; grid_size?: number } = {}) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v != null) qs.set(k, String(v));
     const q = qs.toString();
@@ -74,6 +75,9 @@ export const api = {
   },
   tracks: (ids: number[], maxPoints = 120) => {
     return get<FlightTrack[]>(`/tracks?ids=${ids.join(",")}&max_points=${maxPoints}`);
+  },
+  thermals: (ids: number[]) => {
+    return get<ThermalLight[]>(`/thermals?ids=${ids.join(",")}`);
   },
 
   async refreshWeather(id: number): Promise<FlightSummary> {
