@@ -141,10 +141,6 @@ export default function FlightDetailPage() {
             <div className="metric-value">{fmtNum(flight.avg_ground_speed_kmh, 0, "km/h")}</div>
           </div>
           <div className="metric">
-            <div className="metric-label">最大L/D</div>
-            <div className="metric-value">{fmtNum(flight.best_glide_ratio, 1)}</div>
-          </div>
-          <div className="metric">
             <div className="metric-label">サーマル数</div>
             <div className="metric-value">{flight.thermal_count ?? 0}</div>
           </div>

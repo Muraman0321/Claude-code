@@ -108,7 +108,6 @@ export default function Statistics() {
               <th>総距離</th>
               <th>平均上昇率</th>
               <th>平均速度</th>
-              <th>最大L/D</th>
             </tr>
           </thead>
           <tbody>
@@ -120,7 +119,6 @@ export default function Statistics() {
                 <td>{p.total_distance_km.toFixed(0)} km</td>
                 <td>{fmtNum(p.avg_climb_in_thermals_ms, 2, "m/s")}</td>
                 <td>{fmtNum(p.avg_ground_speed_kmh, 1, "km/h")}</td>
-                <td>{fmtNum(p.best_glide_ratio, 1)}</td>
               </tr>
             ))}
           </tbody>
@@ -134,11 +132,10 @@ export default function Statistics() {
             label: a.aircraft,
             "平均上昇率(m/s)": a.avg_climb_in_thermals_ms ?? 0,
             "平均速度(km/h)": a.avg_ground_speed_kmh ?? 0,
-            "最大L/D": a.best_glide_ratio ?? 0,
           }))}
           metrics={[
             { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
-            { key: "最大L/D", label: "最大L/D", color: "#9a6700" },
+            { key: "平均速度(km/h)", label: "平均速度 (km/h)", color: "#6f42c1" },
           ]}
         />
       </div>
@@ -185,7 +182,6 @@ export default function Statistics() {
                   <th>平均上昇率</th>
                   <th>平均速度</th>
                   <th>平均最高高度</th>
-                  <th>平均L/D</th>
                   <th>平均気温</th>
                   <th>平均風速</th>
                 </tr>
@@ -200,7 +196,6 @@ export default function Statistics() {
                     <td>{fmtNum(s.avg_climb_in_thermals_ms, 2, "m/s")}</td>
                     <td>{fmtNum(s.avg_ground_speed_kmh, 1, "km/h")}</td>
                     <td>{fmtNum(s.avg_max_altitude_m, 0, "m")}</td>
-                    <td>{fmtNum(s.avg_best_glide, 1)}</td>
                     <td>{fmtNum(s.avg_temp_c, 1, "°C")}</td>
                     <td>{fmtNum(s.avg_wind_speed_kmh, 1, "km/h")}</td>
                   </tr>
@@ -213,11 +208,10 @@ export default function Statistics() {
                   label: s.season,
                   "平均上昇率(m/s)": s.avg_climb_in_thermals_ms ?? 0,
                   "平均速度(km/h)": s.avg_ground_speed_kmh ?? 0,
-                  "平均L/D": s.avg_best_glide ?? 0,
                 }))}
                 metrics={[
                   { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
-                  { key: "平均L/D", label: "平均L/D", color: "#9a6700" },
+                  { key: "平均速度(km/h)", label: "平均速度 (km/h)", color: "#6f42c1" },
                 ]}
               />
             </div>
@@ -273,7 +267,6 @@ export default function Statistics() {
                   <th>フライト数</th>
                   <th>平均上昇率</th>
                   <th>平均速度</th>
-                  <th>最大L/D平均</th>
                 </tr>
               </thead>
               <tbody>
@@ -283,7 +276,6 @@ export default function Statistics() {
                     <td>{w.flight_count}</td>
                     <td>{fmtNum(w.avg_climb_rate_ms, 2, "m/s")}</td>
                     <td>{fmtNum(w.avg_ground_speed_kmh, 1, "km/h")}</td>
-                    <td>{fmtNum(w.avg_best_glide, 1)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -294,11 +286,10 @@ export default function Statistics() {
                   label: w.label,
                   "平均上昇率(m/s)": w.avg_climb_rate_ms ?? 0,
                   "平均速度(km/h)": w.avg_ground_speed_kmh ?? 0,
-                  "最大L/D": w.avg_best_glide ?? 0,
                 }))}
                 metrics={[
                   { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
-                  { key: "最大L/D", label: "最大L/D", color: "#9a6700" },
+                  { key: "平均速度(km/h)", label: "平均速度 (km/h)", color: "#6f42c1" },
                 ]}
               />
             </div>

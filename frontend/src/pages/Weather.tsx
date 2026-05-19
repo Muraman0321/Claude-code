@@ -26,7 +26,6 @@ type WeatherKey =
 
 type MetricKey =
   | "avg_climb_in_thermals_ms"
-  | "best_glide_ratio"
   | "total_distance_km"
   | "thermal_count"
   | "max_altitude_m"
@@ -53,7 +52,6 @@ const WEATHER_VARS: (AxisDef & { key: WeatherKey })[] = [
 
 const FLIGHT_METRICS: (AxisDef & { key: MetricKey })[] = [
   { key: "avg_climb_in_thermals_ms", label: "平均上昇率", unit: "m/s" },
-  { key: "best_glide_ratio", label: "最大L/D", unit: "" },
   { key: "total_distance_km", label: "総距離", unit: "km" },
   { key: "thermal_count", label: "サーマル数", unit: "" },
   { key: "max_altitude_m", label: "最高高度", unit: "m" },
@@ -65,18 +63,13 @@ const FLIGHT_METRICS: (AxisDef & { key: MetricKey })[] = [
 
 const COLORS = ["#1f6feb", "#1a7f37", "#cf222e", "#9a6700", "#6f42c1", "#1b9aaa", "#e07b00", "#d63384"];
 
-// These fields store 0 to mean "not computed / no data", not a true zero.
-// Treat them as missing rather than valid zeros in statistical calculations.
-const ZERO_MEANS_MISSING = new Set([
-  "avg_climb_in_thermals_ms", // 0 when no thermals detected
-  "best_glide_ratio",         // 0 when no valid glide window found
-  "max_altitude_m",           // 0 only when GPS completely failed
-]);
-
+// Missing-data handling: previously we treated 0 in selected metrics as "missing"
+// and dropped those rows. This skewed correlations toward conditions where flights
+// happened to produce non-zero outcomes. We now keep all numeric values and let the
+// analysis use the raw distribution.
 function getNum(f: FlightSummary, key: string): number | null {
   const v = (f as unknown as Record<string, number | null | undefined>)[key];
   if (typeof v !== "number" || !Number.isFinite(v)) return null;
-  if (ZERO_MEANS_MISSING.has(key) && v <= 0) return null;
   return v;
 }
 
@@ -94,6 +87,42 @@ function pearson(xs: number[], ys: number[]): number | null {
   }
   const den = Math.sqrt(dx2 * dy2);
   return den > 0 ? num / den : null;
+}
+
+// Average-rank vector (handles ties), used by Spearman.
+function ranks(xs: number[]): number[] {
+  const idx = xs.map((v, i) => ({ v, i })).sort((a, b) => a.v - b.v);
+  const r = new Array(xs.length);
+  let i = 0;
+  while (i < idx.length) {
+    let j = i;
+    while (j + 1 < idx.length && idx[j + 1].v === idx[i].v) j++;
+    const avg = (i + j) / 2 + 1; // 1-based average rank
+    for (let k = i; k <= j; k++) r[idx[k].i] = avg;
+    i = j + 1;
+  }
+  return r;
+}
+
+// Spearman rank correlation — robust to outliers and captures any monotonic relationship.
+function spearman(xs: number[], ys: number[]): number | null {
+  if (xs.length < 3) return null;
+  return pearson(ranks(xs), ranks(ys));
+}
+
+// Quantile-based bin edges: roughly equal sample size per bin. More stable for
+// uneven distributions than fixed-width bins.
+function quantileEdges(xs: number[], k: number): number[] {
+  const sorted = [...xs].sort((a, b) => a - b);
+  const edges: number[] = [];
+  for (let i = 0; i <= k; i++) {
+    const pos = (sorted.length - 1) * (i / k);
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    edges.push(sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo));
+  }
+  // dedupe to handle ties
+  return Array.from(new Set(edges.map((v) => Number(v.toFixed(4)))));
 }
 
 function describeCorr(r: number | null): string {
@@ -161,28 +190,54 @@ export default function Weather() {
   }, [filtered, xKey, yKey]);
 
   const r = useMemo(() => pearson(points.map((p) => p.x), points.map((p) => p.y)), [points]);
+  const rho = useMemo(() => spearman(points.map((p) => p.x), points.map((p) => p.y)), [points]);
 
-  // Binned aggregation: bucket by X-variable, compute mean Y per bucket
+  // Quantile-based binning: edges chosen so each bin has roughly equal sample
+  // size. For each bin we report median (robust to outliers) and IQR.
   const binned = useMemo(() => {
-    const edges = xDef.bins ?? [];
+    if (points.length < 4) return [];
+    const k = Math.min(6, Math.max(3, Math.floor(points.length / 8)));
+    const edges = quantileEdges(points.map((p) => p.x), k);
     if (edges.length < 2) return [];
-    const buckets: { label: string; n: number; mean: number; values: number[] }[] = [];
+    const buckets: { label: string; n: number; median: number; q1: number; q3: number; values: number[] }[] = [];
     for (let i = 0; i < edges.length - 1; i++) {
-      buckets.push({ label: bucketLabel(edges, i, xDef.unit), n: 0, mean: 0, values: [] });
+      const lo = Number(edges[i].toFixed(1));
+      const hi = Number(edges[i + 1].toFixed(1));
+      buckets.push({ label: `${lo}–${hi}${xDef.unit ? " " + xDef.unit : ""}`, n: 0, median: 0, q1: 0, q3: 0, values: [] });
     }
     for (const p of points) {
-      const i = binIndex(p.x, edges);
-      buckets[i].values.push(p.y);
+      let bi = -1;
+      for (let i = 0; i < edges.length - 1; i++) {
+        if (p.x >= edges[i] && (i === edges.length - 2 ? p.x <= edges[i + 1] : p.x < edges[i + 1])) {
+          bi = i;
+          break;
+        }
+      }
+      if (bi >= 0) buckets[bi].values.push(p.y);
+    }
+    function quantile(sorted: number[], q: number): number {
+      const pos = (sorted.length - 1) * q;
+      const lo = Math.floor(pos);
+      const hi = Math.ceil(pos);
+      return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
     }
     for (const b of buckets) {
       b.n = b.values.length;
-      b.mean = b.n > 0 ? Number((b.values.reduce((a, c) => a + c, 0) / b.n).toFixed(2)) : 0;
+      if (b.n > 0) {
+        const s = [...b.values].sort((a, c) => a - c);
+        b.median = Number(quantile(s, 0.5).toFixed(2));
+        b.q1 = Number(quantile(s, 0.25).toFixed(2));
+        b.q3 = Number(quantile(s, 0.75).toFixed(2));
+      }
     }
     return buckets;
   }, [points, xDef]);
 
+  const [corrMethod, setCorrMethod] = useState<"pearson" | "spearman">("spearman");
+
   // Correlation matrix: all weather x all metrics
   const corrMatrix = useMemo(() => {
+    const fn = corrMethod === "spearman" ? spearman : pearson;
     return WEATHER_VARS.map((w) => ({
       weather: w,
       cells: FLIGHT_METRICS.map((m) => {
@@ -195,10 +250,10 @@ export default function Weather() {
           xs.push(x);
           ys.push(y);
         }
-        return { metric: m, r: pearson(xs, ys), n: xs.length };
+        return { metric: m, r: fn(xs, ys), n: xs.length };
       }),
     }));
-  }, [filtered]);
+  }, [filtered, corrMethod]);
 
   return (
     <div>
@@ -251,12 +306,18 @@ export default function Weather() {
             </select>
           </span>
           <span style={{ alignSelf: "center" }}>
-            <strong>Pearson r = {r != null ? r.toFixed(3) : "—"}</strong>
+            <strong>Spearman ρ = {rho != null ? rho.toFixed(3) : "—"}</strong>
             <span style={{ color: "#57606a", marginLeft: "0.4rem" }}>
-              ({describeCorr(r)}, 有効 n={points.length})
+              ({describeCorr(rho)})
+            </span>
+            <span style={{ color: "#57606a", marginLeft: "0.6rem", fontSize: "0.85rem" }}>
+              Pearson r = {r != null ? r.toFixed(3) : "—"}, 有効 n={points.length}
             </span>
           </span>
         </div>
+        <p style={{ fontSize: "0.78rem", color: "#57606a", margin: "0.4rem 0 0" }}>
+          ※ Spearman ρ は順位相関で外れ値や非線形（単調）関係に強い指標です。線形性が強ければ Pearson r とほぼ一致します。
+        </p>
 
         {points.length === 0 ? (
           <div className="empty">該当データなし — 気象データ取得済みのフライトがありません</div>
@@ -299,8 +360,11 @@ export default function Weather() {
             </div>
 
             <h3 style={{ marginTop: "1rem", marginBottom: "0.3rem", fontSize: "0.95rem" }}>
-              ビン集計 — {xDef.label}帯ごとの{yDef.label}平均
+              分位ビン集計 — {xDef.label}帯ごとの{yDef.label}（中央値・四分位）
             </h3>
+            <p style={{ fontSize: "0.78rem", color: "#57606a", margin: "0 0 0.3rem" }}>
+              各ビンは概ね同数になるよう分位点で区切っています（外れ値に強い）。バー = 中央値、誤差 = 第1〜第3四分位 (IQR)。
+            </p>
             <div style={{ width: "100%", height: 260 }}>
               <ResponsiveContainer>
                 <BarChart data={binned} margin={{ top: 12, right: 16, bottom: 32, left: 8 }}>
@@ -308,8 +372,8 @@ export default function Weather() {
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} angle={-15} textAnchor="end" interval={0} height={60} />
                   <YAxis label={{ value: `${yDef.label}${yDef.unit ? ` (${yDef.unit})` : ""}`, angle: -90, position: "insideLeft" }} />
                   <Tooltip
-                    formatter={(v: number, name: string, props) => {
-                      if (name === "mean") return [v, `${yDef.label}平均`];
+                    formatter={(v: number, name: string) => {
+                      if (name === "median") return [v, `${yDef.label} 中央値`];
                       return [v, name];
                     }}
                     labelFormatter={(label, payload) => {
@@ -317,7 +381,7 @@ export default function Weather() {
                       return b ? `${label} (n=${b.n})` : label;
                     }}
                   />
-                  <Bar dataKey="mean" name="平均">
+                  <Bar dataKey="median" name="中央値">
                     {binned.map((b, i) => (
                       <Cell key={i} fill={b.n === 0 ? "#cccccc" : COLORS[i % COLORS.length]} />
                     ))}
@@ -331,7 +395,8 @@ export default function Weather() {
                 <tr>
                   <th>{xDef.label}帯</th>
                   <th>フライト数</th>
-                  <th>{yDef.label} 平均</th>
+                  <th>{yDef.label} 中央値</th>
+                  <th>Q1–Q3 (IQR)</th>
                 </tr>
               </thead>
               <tbody>
@@ -339,7 +404,8 @@ export default function Weather() {
                   <tr key={i}>
                     <td>{b.label}</td>
                     <td>{b.n}</td>
-                    <td>{b.n > 0 ? `${b.mean.toFixed(2)}${yDef.unit ? " " + yDef.unit : ""}` : "—"}</td>
+                    <td>{b.n > 0 ? `${b.median.toFixed(2)}${yDef.unit ? " " + yDef.unit : ""}` : "—"}</td>
+                    <td>{b.n > 0 ? `${b.q1.toFixed(2)} – ${b.q3.toFixed(2)}` : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -350,9 +416,18 @@ export default function Weather() {
 
       <div className="card">
         <h2>相関マトリクス — 全気象変数 × 全飛行指標</h2>
-        <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
-          各セルはPearson相関係数 (-1〜+1)。緑=正、赤=負、濃いほど強い。サンプル数3未満は空欄。
-        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", margin: "0 0 0.4rem", flexWrap: "wrap" }}>
+          <span style={{ fontSize: "0.85rem" }}>
+            手法:{" "}
+            <select value={corrMethod} onChange={(e) => setCorrMethod(e.target.value as "pearson" | "spearman")}>
+              <option value="spearman">Spearman ρ (順位相関・推奨)</option>
+              <option value="pearson">Pearson r (線形相関)</option>
+            </select>
+          </span>
+          <span style={{ fontSize: "0.82rem", color: "#57606a" }}>
+            各セルは相関係数 (-1〜+1)。緑=正、赤=負、濃いほど強い。サンプル数3未満は空欄。
+          </span>
+        </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ minWidth: "640px" }}>
             <thead>

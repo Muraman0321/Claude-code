@@ -327,6 +327,8 @@ function CompareTab({
   thermalsB,
   statsA,
   statsB,
+  flightHoursA,
+  flightHoursB,
 }: {
   pilots: string[];
   pilotA: string;
@@ -336,7 +338,11 @@ function CompareTab({
   thermalsB: ThermalLight[];
   statsA: PilotThermalStats;
   statsB: PilotThermalStats;
+  flightHoursA: number;
+  flightHoursB: number;
 }) {
+  const rateA = flightHoursA > 0 ? statsA.count / flightHoursA : 0;
+  const rateB = flightHoursB > 0 ? statsB.count / flightHoursB : 0;
   const rows: Array<{
     label: string;
     a: string;
@@ -344,11 +350,11 @@ function CompareTab({
     better: "a" | "b" | "none";
   }> = [
     {
-      label: "サーマル数",
-      a: statsA.count.toString(),
-      b: statsB.count.toString(),
+      label: "サーマル数 / 飛行時間 (件/h)",
+      a: flightHoursA > 0 ? `${rateA.toFixed(2)} (${statsA.count}/${flightHoursA.toFixed(1)}h)` : "—",
+      b: flightHoursB > 0 ? `${rateB.toFixed(2)} (${statsB.count}/${flightHoursB.toFixed(1)}h)` : "—",
       better:
-        statsA.count > statsB.count ? "a" : statsB.count > statsA.count ? "b" : "none",
+        rateA > rateB ? "a" : rateB > rateA ? "b" : "none",
     },
     {
       label: "平均上昇率 (m/s)",
@@ -569,6 +575,7 @@ export default function PilotAnalysis() {
   const [tab, setTab] = useState<Tab>("thermal");
 
   const [allThermals, setAllThermals] = useState<ThermalLight[]>([]);
+  const [allFlights, setAllFlights] = useState<FlightSummary[]>([]);
   const [flights, setFlights] = useState<FlightSummary[]>([]);
   const [selectedFlightId, setSelectedFlightId] = useState<number | null>(null);
   const [flightDetail, setFlightDetail] = useState<FlightDetail | null>(null);
@@ -583,7 +590,16 @@ export default function PilotAnalysis() {
       if (p.length > 0) setPilot(p[0]);
     });
     api.allThermals().then(setAllThermals);
+    api.listFlights().then(setAllFlights);
   }, []);
+
+  const flightHoursByPilot = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of allFlights) {
+      m.set(f.pilot, (m.get(f.pilot) ?? 0) + (f.duration_s ?? 0) / 3600);
+    }
+    return m;
+  }, [allFlights]);
 
   // Load flights for selected pilot
   useEffect(() => {
@@ -733,6 +749,8 @@ export default function PilotAnalysis() {
           thermalsB={compareThermals}
           statsA={pilotStats}
           statsB={compareStats}
+          flightHoursA={flightHoursByPilot.get(pilot) ?? 0}
+          flightHoursB={flightHoursByPilot.get(comparePilot) ?? 0}
         />
       )}
     </div>

@@ -1,9 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { CircleMarker, MapContainer, Polygon, TileLayer, Tooltip } from "react-leaflet";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip as RTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { api } from "../api/client";
 import { RateHistogramChart } from "../components/Charts";
 import type { AreaBlock, AreaStats, BlockStats, HistogramGroup } from "../types";
 import { fmtNum } from "../utils/format";
+
+const COMPARE_COLORS = [
+  "#1f6feb", "#1a7f37", "#cf222e", "#9a6700", "#6f42c1",
+  "#1b9aaa", "#e07b00", "#d63384", "#198754", "#0d6efd",
+];
 
 type StatsView = "overall" | "season" | "day";
 
@@ -68,7 +83,8 @@ function blockFillColor(block: AreaBlock, maxClimb: number, selected: boolean): 
 }
 
 export default function Area() {
-  const [mode, setMode] = useState<Mode>("sectors");
+  const [mode, setMode] = useState<Mode>("grid");
+  const [compareIds, setCompareIds] = useState<string[]>([]);
   const [centerLat, setCenterLat] = useState(MENUMA.lat);
   const [centerLon, setCenterLon] = useState(MENUMA.lon);
   const [radiusKm, setRadiusKm] = useState(9);
@@ -92,6 +108,7 @@ export default function Area() {
           : await api.areaGrid({ center_lat: centerLat, center_lon: centerLon, cell_km: cellKm, grid_size: gridSize });
       setData(res);
       setSelectedBlock(null);
+      setCompareIds([]);
     } finally {
       setLoading(false);
     }
@@ -347,6 +364,100 @@ export default function Area() {
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div className="card">
+            <h2>ブロック比較 — 時間帯ごとの上昇率</h2>
+            <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
+              比較したいブロックをチェック。現地時刻(時)を横軸、ブロック内サーマルの平均上昇率を縦軸にしたヒストグラム一覧。
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.9rem", marginBottom: "0.75rem" }}>
+              {data.blocks.map((b) => (
+                <label key={b.id} style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}>
+                  <input
+                    type="checkbox"
+                    checked={compareIds.includes(b.id)}
+                    onChange={(e) =>
+                      setCompareIds((prev) =>
+                        e.target.checked ? [...prev, b.id] : prev.filter((x) => x !== b.id),
+                      )
+                    }
+                    disabled={!compareIds.includes(b.id) && b.thermal_count === 0}
+                    style={{ marginRight: "0.25rem" }}
+                  />
+                  {b.label} ({b.thermal_count})
+                </label>
+              ))}
+              {compareIds.length > 0 && (
+                <button className="ghost" onClick={() => setCompareIds([])}>選択解除</button>
+              )}
+            </div>
+            {compareIds.length === 0 ? (
+              <div className="empty">ブロックを選択してください</div>
+            ) : (
+              (() => {
+                const selBlocks = compareIds
+                  .map((id) => data.blocks.find((b) => b.id === id))
+                  .filter((b): b is AreaBlock => !!b);
+                const chartData = Array.from({ length: 24 }, (_, h) => {
+                  const row: Record<string, number | string | null> = { hour: `${h.toString().padStart(2, "0")}` };
+                  for (const b of selBlocks) {
+                    const cell = b.by_hour.find((c) => c.hour === h);
+                    row[b.label] = cell ? Number(cell.avg_climb_rate_ms.toFixed(2)) : 0;
+                  }
+                  return row;
+                });
+                return (
+                  <>
+                    <div style={{ width: "100%", height: 320 }}>
+                      <ResponsiveContainer>
+                        <BarChart data={chartData} margin={{ top: 10, right: 16, bottom: 24, left: 8 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="hour" label={{ value: "現地時刻 (時)", position: "insideBottom", offset: -8 }} />
+                          <YAxis label={{ value: "平均上昇率 (m/s)", angle: -90, position: "insideLeft" }} />
+                          <RTooltip />
+                          <Legend />
+                          {selBlocks.map((b, i) => (
+                            <Bar key={b.id} dataKey={b.label} fill={COMPARE_COLORS[i % COMPARE_COLORS.length]} />
+                          ))}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <table style={{ marginTop: "0.75rem", fontSize: "0.82rem" }}>
+                      <thead>
+                        <tr>
+                          <th>ブロック</th>
+                          {Array.from({ length: 24 }, (_, h) => (
+                            <th key={h} style={{ padding: "0.15rem 0.3rem" }}>{h.toString().padStart(2, "0")}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selBlocks.map((b, i) => {
+                          const hourMap = new Map(b.by_hour.map((c) => [c.hour, c]));
+                          return (
+                            <tr key={b.id}>
+                              <td style={{ whiteSpace: "nowrap", color: COMPARE_COLORS[i % COMPARE_COLORS.length], fontWeight: 600 }}>
+                                {b.label}
+                              </td>
+                              {Array.from({ length: 24 }, (_, h) => {
+                                const c = hourMap.get(h);
+                                return (
+                                  <td key={h} style={{ padding: "0.15rem 0.3rem", textAlign: "right" }}
+                                      title={c ? `n=${c.thermal_count}` : ""}>
+                                    {c ? c.avg_climb_rate_ms.toFixed(1) : "—"}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </>
+                );
+              })()
+            )}
           </div>
 
           {selected && (

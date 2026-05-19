@@ -78,7 +78,6 @@ export default function Dashboard() {
                 <th>最高高度</th>
                 <th>平均上昇率</th>
                 <th>最高速度</th>
-                <th>最大L/D</th>
                 <th>サーマル</th>
                 <th></th>
               </tr>
@@ -94,7 +93,6 @@ export default function Dashboard() {
                   <td>{fmtNum(f.max_altitude_m, 0, "m")}</td>
                   <td>{fmtNum(f.avg_climb_in_thermals_ms, 2, "m/s")}</td>
                   <td>{fmtNum(f.max_ground_speed_kmh, 0, "km/h")}</td>
-                  <td>{fmtNum(f.best_glide_ratio, 1)}</td>
                   <td>{f.thermal_count ?? 0}</td>
                   <td>
                     <Link to={`/flights/${f.id}`}>詳細</Link>

@@ -14,7 +14,6 @@ type SortKey =
   | "max_altitude_m"
   | "avg_climb_in_thermals_ms"
   | "max_ground_speed_kmh"
-  | "best_glide_ratio"
   | "thermal_count";
 
 interface ColumnDef {
@@ -33,7 +32,6 @@ const COLUMNS: ColumnDef[] = [
   { key: "max_altitude_m", label: "最高高度", render: (f) => fmtNum(f.max_altitude_m, 0, "m"), numeric: true },
   { key: "avg_climb_in_thermals_ms", label: "平均上昇率", render: (f) => fmtNum(f.avg_climb_in_thermals_ms, 2, "m/s"), numeric: true },
   { key: "max_ground_speed_kmh", label: "最高速度", render: (f) => fmtNum(f.max_ground_speed_kmh, 0, "km/h"), numeric: true },
-  { key: "best_glide_ratio", label: "最大L/D", render: (f) => fmtNum(f.best_glide_ratio, 1), numeric: true },
   {
     key: "thermal_count",
     label: "サーマル密度(件/h)",
@@ -49,8 +47,6 @@ const COLORS = [
   "#1f6feb", "#1a7f37", "#cf222e", "#9a6700", "#6f42c1",
   "#1b9aaa", "#e07b00", "#d63384", "#198754", "#0d6efd",
 ];
-
-const MAX_SELECTED = 100;
 
 // Compute a geodesic rounded-rectangle polygon aligned along start→end.
 // halfWidthM is the half-width; corner radius is 35% of that.
@@ -172,13 +168,13 @@ export default function Compare() {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
-      else if (next.size < MAX_SELECTED) next.add(id);
+      else next.add(id);
       return next;
     });
   }
 
   function selectAllFiltered() {
-    setSelected(new Set(sorted.slice(0, MAX_SELECTED).map((f) => f.id)));
+    setSelected(new Set(sorted.map((f) => f.id)));
   }
 
   function clearSelection() {
@@ -238,7 +234,7 @@ export default function Compare() {
 
   return (
     <div>
-      <h1>フライト比較 ({selected.size}/{MAX_SELECTED} 件選択中)</h1>
+      <h1>フライト比較 ({selected.size} 件選択中)</h1>
 
       <div className="card">
         <h2>フィルター</h2>
@@ -252,7 +248,7 @@ export default function Compare() {
             {aircraft.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
           <button className="ghost" onClick={selectAllFiltered}>
-            絞り込み結果を全選択 ({Math.min(sorted.length, MAX_SELECTED)})
+            絞り込み結果を全選択 ({sorted.length})
           </button>
           <button className="ghost" onClick={clearSelection}>選択解除</button>
         </div>
@@ -310,14 +306,13 @@ export default function Compare() {
                     label: `${f.pilot}/${f.aircraft}/${fmtDate(f.flight_date)}`,
                     "平均上昇率(m/s)": f.avg_climb_in_thermals_ms ?? 0,
                     "平均速度(km/h)": f.avg_ground_speed_kmh ?? 0,
-                    "最大L/D": f.best_glide_ratio ?? 0,
                     "距離(km)": f.total_distance_km ?? 0,
                     "サーマル密度(件/h)": hours > 0 ? (f.thermal_count ?? 0) / hours : 0,
                   };
                 })}
                 metrics={[
                   { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
-                  { key: "最大L/D", label: "最大L/D", color: "#9a6700" },
+                  { key: "平均速度(km/h)", label: "平均速度 (km/h)", color: "#6f42c1" },
                   { key: "距離(km)", label: "距離 (km)", color: "#1f6feb" },
                   { key: "サーマル密度(件/h)", label: "サーマル密度 (件/h)", color: "#e07b00" },
                 ]}
