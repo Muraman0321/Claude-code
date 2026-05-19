@@ -200,6 +200,11 @@ export const api = {
     return all.filter((t) => set.has(t.flight_id));
   },
 
+  async allThermals(): Promise<ThermalLight[]> {
+    await ensureSession();
+    return flightsDb.listAllThermals();
+  },
+
   async blockStats(params: {
     shape: "sector" | "cell";
     center_lat: number;
