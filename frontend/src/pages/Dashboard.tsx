@@ -35,10 +35,26 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterPilot, filterAircraft, filterFrom, filterTo]);
 
+  const [cleanBusy, setCleanBusy] = useState(false);
+
   async function handleDelete(id: number) {
     if (!confirm("このフライトを削除しますか？")) return;
     await api.deleteFlight(id);
     refresh();
+  }
+
+  async function handleCleanDuplicates() {
+    if (!confirm("重複フライト（同じパイロット・同じ開始時刻）を自動削除します。よろしいですか？")) return;
+    setCleanBusy(true);
+    try {
+      const n = await api.cleanDuplicates();
+      alert(n > 0 ? `${n} 件の重複フライトを削除しました。` : "重複フライトは見つかりませんでした。");
+      refresh();
+    } catch (e) {
+      alert(`エラー: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCleanBusy(false);
+    }
   }
 
   return (
@@ -63,7 +79,23 @@ export default function Dashboard() {
       </div>
 
       <div className="card">
-        <h2>フライト一覧 ({flights.length} 件)</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2>フライト一覧 ({flights.length} 件)</h2>
+          <button
+            onClick={handleCleanDuplicates}
+            disabled={cleanBusy}
+            style={{
+              padding: "0.3rem 0.8rem",
+              background: cleanBusy ? "#ccc" : "#f6f8fa",
+              border: "1px solid #d0d7de",
+              borderRadius: "6px",
+              cursor: cleanBusy ? "not-allowed" : "pointer",
+              fontSize: "0.85rem",
+            }}
+          >
+            {cleanBusy ? "削除中..." : "重複を削除"}
+          </button>
+        </div>
         {flights.length === 0 ? (
           <div className="empty">フライトがまだありません。IGCファイルをアップロードしてください。</div>
         ) : (

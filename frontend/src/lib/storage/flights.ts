@@ -231,14 +231,20 @@ export async function saveFlight(
 ): Promise<SaveFlightResult> {
   const owner = await currentOwner();
 
-  // Replace existing flight with the same (filename, pilot) (case-insensitive).
-  // We can't easily do `.ilike()` on two columns at once, so fetch then delete.
-  const { data: existing } = await supabase
+  // Dedup by (pilot, started_at) — same pilot + same start timestamp = same flight regardless of filename.
+  // Fall back to (pilot, flight_date, filename) if started_at is unavailable.
+  let existingQuery = supabase
     .from("flights")
     .select("id")
-    .eq("owner", owner)
-    .ilike("filename", payload.filename)
     .ilike("pilot", payload.meta.pilot);
+  if (payload.start.timestamp) {
+    existingQuery = existingQuery.eq("started_at", payload.start.timestamp);
+  } else {
+    existingQuery = existingQuery
+      .eq("flight_date", payload.meta.flight_date)
+      .ilike("filename", payload.filename);
+  }
+  const { data: existing } = await existingQuery;
   if (existing && existing.length > 0) {
     for (const row of existing as { id: number }[]) {
       await deleteFlight(row.id);
@@ -311,6 +317,37 @@ export async function updateWeather(
     .single();
   if (error) throw new Error(error.message);
   return rowToSummary(data as FlightRow);
+}
+
+/** Remove duplicate flight records (same pilot + started_at), keeping the highest id. Returns count deleted. */
+export async function cleanDuplicateFlights(): Promise<number> {
+  const { data, error } = await supabase
+    .from("flights")
+    .select("id, pilot, started_at, flight_date")
+    .order("id", { ascending: true });
+  if (error) throw new Error(error.message);
+
+  // Group by (pilot, started_at). For flights with null started_at, group by (pilot, flight_date).
+  const groups = new Map<string, number[]>();
+  for (const row of data as { id: number; pilot: string; started_at: string | null; flight_date: string }[]) {
+    const key = row.started_at
+      ? `${row.pilot.toLowerCase()}|${row.started_at}`
+      : `${row.pilot.toLowerCase()}|date:${row.flight_date}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row.id);
+  }
+
+  let deleted = 0;
+  for (const ids of groups.values()) {
+    if (ids.length <= 1) continue;
+    // Keep the highest id (most recently inserted), delete the rest.
+    const toDelete = ids.slice(0, ids.length - 1);
+    for (const id of toDelete) {
+      await deleteFlight(id);
+      deleted++;
+    }
+  }
+  return deleted;
 }
 
 /** Bulk fetch — for stats screens that aggregate across many flights. */

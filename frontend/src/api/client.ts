@@ -262,6 +262,11 @@ export const api = {
     return blockStatsLocal(shape, params.block_label ?? "Block", inputs);
   },
 
+  async cleanDuplicates(): Promise<number> {
+    await ensureSession();
+    return flightsDb.cleanDuplicateFlights();
+  },
+
   async refreshWeather(id: number): Promise<FlightSummary> {
     await ensureSession();
     const detail = await flightsDb.getFlight(id);
