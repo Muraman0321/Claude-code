@@ -14,6 +14,7 @@ import type {
   AreaStats,
   BlockStats,
   FlightDetail,
+  FlightPhaseAnalysis,
   FlightSummary,
   FlightTrack,
   PilotStats,
@@ -102,6 +103,15 @@ export const api = {
   async getFlight(id: number): Promise<FlightDetail> {
     await ensureSession();
     return flightsDb.getFlight(id);
+  },
+
+  async getFlightPhaseAnalysis(id: number): Promise<FlightPhaseAnalysis> {
+    // Call backend API for phase analysis
+    const response = await fetch(`/api/flights/${id}/phase-analysis`);
+    if (!response.ok) {
+      throw new Error(`phase analysis failed: ${response.statusText}`);
+    }
+    return response.json();
   },
 
   async deleteFlight(id: number): Promise<void> {

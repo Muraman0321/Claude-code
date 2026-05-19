@@ -4,6 +4,7 @@ import Area from "./pages/Area";
 import Compare from "./pages/Compare";
 import Dashboard from "./pages/Dashboard";
 import FlightDetail from "./pages/FlightDetail";
+import FlightPhase from "./pages/FlightPhase";
 import PilotAnalysis from "./pages/PilotAnalysis";
 import Statistics from "./pages/Statistics";
 import Weather from "./pages/Weather";
@@ -32,6 +33,7 @@ function AppShell() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/flights/:id" element={<FlightDetail />} />
+          <Route path="/flights/:id/phase" element={<FlightPhase />} />
           <Route path="/compare" element={<Compare />} />
           <Route path="/statistics" element={<Statistics />} />
           <Route path="/pilot-analysis" element={<PilotAnalysis />} />

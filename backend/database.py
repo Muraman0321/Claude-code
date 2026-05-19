@@ -52,6 +52,10 @@ def _add_missing_columns() -> None:
         "weather_dewpoint_c": "REAL",
         "weather_cloud_base_m": "REAL",
         "weather_source": "VARCHAR",
+        "tow_phase_end_fix_seq": "INTEGER",
+        "mid_phase_end_fix_seq": "INTEGER",
+        "release_altitude_m": "REAL",
+        "release_fix_seq": "INTEGER",
     }
     with engine.begin() as conn:
         for name, sql_type in flight_additions.items():

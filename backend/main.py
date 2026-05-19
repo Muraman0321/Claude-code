@@ -30,12 +30,14 @@ from schemas import (
     BlockStats,
     FixOut,
     FlightDetailOut,
+    FlightPhaseAnalysisOut,
     FlightSummaryOut,
     FlightTrack,
     HistogramBin,
     HistogramGroup,
     HourCell,
     PilotStats,
+    PhaseMetricsOut,
     SeasonBucket,
     ThermalLight,
     ThermalOut,
@@ -93,6 +95,7 @@ def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
     metrics = analysis.compute_fix_metrics(igc.fixes)
     thermals = analysis.detect_thermals(igc.fixes, metrics)
     summary = analysis.compute_summary(igc.fixes, metrics, thermals)
+    phase_boundaries = analysis.detect_winch_phases(igc.fixes, metrics)
 
     existing = (
         db.query(Flight)
@@ -140,6 +143,10 @@ def _ingest_one(db: Session, filename: str, content: bytes) -> UploadResultOut:
         weather_cloud_cover_pct=wx.cloud_cover_pct if wx else None,
         weather_humidity_pct=wx.humidity_pct if wx else None,
         weather_source=wx.source if wx else None,
+        tow_phase_end_fix_seq=phase_boundaries.tow_phase_end_fix_seq,
+        mid_phase_end_fix_seq=phase_boundaries.mid_phase_end_fix_seq,
+        release_altitude_m=phase_boundaries.release_altitude_m,
+        release_fix_seq=phase_boundaries.release_fix_seq,
         raw_igc=content.decode("latin-1"),
     )
 
@@ -305,6 +312,64 @@ def delete_flight(flight_id: int, db: Session = Depends(get_db)):
     db.delete(flight)
     db.commit()
     return {"deleted": flight_id}
+
+
+@core.get("/api/flights/{flight_id}/phase-analysis", response_model=FlightPhaseAnalysisOut)
+def flight_phase_analysis(flight_id: int, db: Session = Depends(get_db)):
+    """Analyze winch launch phases for a flight."""
+    flight = db.query(Flight).filter(Flight.id == flight_id).one_or_none()
+    if not flight:
+        raise HTTPException(status_code=404, detail="flight not found")
+
+    # Reconstruct the flight from raw IGC for analysis
+    if not flight.raw_igc:
+        raise HTTPException(status_code=400, detail="raw IGC not available for this flight")
+
+    igc = igc_parser.parse_igc_bytes(flight.raw_igc.encode("latin-1"))
+    metrics = analysis.compute_fix_metrics(igc.fixes)
+    boundaries = analysis.detect_winch_phases(igc.fixes, metrics)
+    phase_metrics = analysis.compute_phase_metrics(igc.fixes, metrics, boundaries)
+
+    # Build response
+    result = FlightPhaseAnalysisOut(
+        flight_id=flight.id,
+        tow_phase_end_fix_seq=boundaries.tow_phase_end_fix_seq,
+        mid_phase_end_fix_seq=boundaries.mid_phase_end_fix_seq,
+        release_altitude_m=boundaries.release_altitude_m,
+        release_fix_seq=boundaries.release_fix_seq,
+    )
+
+    if "initial" in phase_metrics:
+        m = phase_metrics["initial"]
+        result.initial = PhaseMetricsOut(
+            duration_s=m.duration_s,
+            avg_speed_kmh=m.avg_speed_kmh,
+            avg_climb_rate_ms=m.avg_climb_rate_ms,
+            altitude_gained_m=m.altitude_gained_m,
+            max_speed_kmh=m.max_speed_kmh,
+        )
+
+    if "mid" in phase_metrics:
+        m = phase_metrics["mid"]
+        result.mid = PhaseMetricsOut(
+            duration_s=m.duration_s,
+            avg_speed_kmh=m.avg_speed_kmh,
+            avg_climb_rate_ms=m.avg_climb_rate_ms,
+            altitude_gained_m=m.altitude_gained_m,
+            max_speed_kmh=m.max_speed_kmh,
+        )
+
+    if "late" in phase_metrics:
+        m = phase_metrics["late"]
+        result.late = PhaseMetricsOut(
+            duration_s=m.duration_s,
+            avg_speed_kmh=m.avg_speed_kmh,
+            avg_climb_rate_ms=m.avg_climb_rate_ms,
+            altitude_gained_m=m.altitude_gained_m,
+            max_speed_kmh=m.max_speed_kmh,
+        )
+
+    return result
 
 
 @core.get("/api/pilots", response_model=list[str])

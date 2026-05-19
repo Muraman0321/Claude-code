@@ -208,3 +208,25 @@ class ThermalLight(BaseModel):
     start_lon: float | None = None
     end_lat: float | None = None
     end_lon: float | None = None
+
+
+class PhaseMetricsOut(BaseModel):
+    """Metrics for a single winch launch phase."""
+    duration_s: float
+    avg_speed_kmh: float
+    avg_climb_rate_ms: float
+    altitude_gained_m: float | None = None
+    max_speed_kmh: float | None = None
+    stability_score: float | None = None
+
+
+class FlightPhaseAnalysisOut(BaseModel):
+    """Complete winch launch phase analysis for a flight."""
+    flight_id: int
+    tow_phase_end_fix_seq: int | None
+    mid_phase_end_fix_seq: int | None
+    release_altitude_m: float | None
+    release_fix_seq: int | None
+    initial: PhaseMetricsOut | None = None
+    mid: PhaseMetricsOut | None = None
+    late: PhaseMetricsOut | None = None

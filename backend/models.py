@@ -40,6 +40,12 @@ class Flight(Base):
     thermal_time_s = Column(Float, nullable=True)
     cruise_time_s = Column(Float, nullable=True)
 
+    # Winch launch phase boundaries and metrics (for competitive glider analysis)
+    tow_phase_end_fix_seq = Column(Integer, nullable=True)  # sequence at 80m altitude
+    mid_phase_end_fix_seq = Column(Integer, nullable=True)  # sequence where climb rate drops < 2.0 m/s
+    release_altitude_m = Column(Float, nullable=True)  # altitude at tow release
+    release_fix_seq = Column(Integer, nullable=True)  # sequence of release fix
+
     # Takeoff location, used for the weather lookup and for time-of-day analysis
     # (local hour is estimated from longitude when no timezone info is available).
     start_latitude = Column(Float, nullable=True)

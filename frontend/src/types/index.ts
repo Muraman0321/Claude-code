@@ -197,3 +197,23 @@ export interface SeasonBucket {
   avg_temp_c: number | null;
   avg_wind_speed_kmh: number | null;
 }
+
+export interface PhaseMetrics {
+  duration_s: number;
+  avg_speed_kmh: number;
+  avg_climb_rate_ms: number;
+  altitude_gained_m: number | null;
+  max_speed_kmh: number | null;
+  stability_score: number | null;
+}
+
+export interface FlightPhaseAnalysis {
+  flight_id: number;
+  tow_phase_end_fix_seq: number | null;
+  mid_phase_end_fix_seq: number | null;
+  release_altitude_m: number | null;
+  release_fix_seq: number | null;
+  initial: PhaseMetrics | null;
+  mid: PhaseMetrics | null;
+  late: PhaseMetrics | null;
+}

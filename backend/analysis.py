@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, asdict
+from datetime import timedelta
 from typing import Iterable
 
 from igc_parser import Fix
@@ -403,6 +404,164 @@ def compute_summary(fixes: list[Fix], metrics: list[FixMetrics], thermals: list[
         thermal_time_s=round(thermal_time, 1),
         cruise_time_s=round(max(duration - thermal_time, 0), 1),
     )
+
+
+@dataclass
+class PhaseBoundaries:
+    """Detected phase boundaries for winch launch analysis."""
+    tow_phase_end_fix_seq: int | None  # sequence at 80m altitude
+    mid_phase_end_fix_seq: int | None  # sequence where climb rate drops < 2.0 m/s
+    release_altitude_m: float | None  # altitude at tow release
+    release_fix_seq: int | None  # sequence of release fix
+
+
+def detect_winch_phases(
+    fixes: list[Fix],
+    metrics: list[FixMetrics],
+) -> PhaseBoundaries:
+    """Detect winch launch phase boundaries.
+
+    Returns indices for:
+    - Initial phase end: first fix at altitude >= 80m
+    - Mid phase end: first fix where climb rate < 2.0 m/s sustained for >= 3 seconds
+    - Release altitude and sequence: the tow cut point
+    """
+    if not fixes or not metrics:
+        return PhaseBoundaries(None, None, None, None)
+
+    # Find release point (tow cut)
+    release_idx = _tow_release_index(fixes, metrics)
+    release_alt = _altitude_for_display(fixes[release_idx])
+
+    # Find takeoff point (first movement)
+    move_start = next(
+        (i for i, m in enumerate(metrics) if m.ground_speed_kmh > 15), 0
+    )
+    takeoff_alt = _altitude_for_display(fixes[move_start])
+
+    # Find initial phase end: first fix at >= 80m altitude
+    initial_end_idx = None
+    for i in range(move_start, release_idx + 1):
+        alt = _altitude_for_display(fixes[i])
+        if alt - takeoff_alt >= 80:
+            initial_end_idx = i
+            break
+
+    # Find mid phase end: first sustained (>= 3s) segment where climb < 2.0 m/s
+    # Start search from initial phase end (or from release if initial didn't reach 80m)
+    search_start = initial_end_idx if initial_end_idx else move_start
+    mid_end_idx = None
+
+    if search_start < release_idx:
+        # Look for a 3-second window where climb rate stays below 2.0 m/s
+        for i in range(search_start, release_idx):
+            # Find the timestamp 3 seconds forward
+            target_time = fixes[i].timestamp + timedelta(seconds=3)
+
+            # Find the first index at or after this target time
+            end_window = i
+            while end_window < release_idx and fixes[end_window].timestamp < target_time:
+                end_window += 1
+
+            # Check if all fixes in this window have climb < 2.0 m/s
+            window_metrics = metrics[i:end_window + 1]
+            if window_metrics and all(m.climb_rate_ms < 2.0 for m in window_metrics):
+                mid_end_idx = i
+                break
+
+    return PhaseBoundaries(
+        tow_phase_end_fix_seq=initial_end_idx,
+        mid_phase_end_fix_seq=mid_end_idx,
+        release_altitude_m=float(release_alt),
+        release_fix_seq=release_idx,
+    )
+
+
+@dataclass
+class PhaseMetrics:
+    """Metrics for a single winch launch phase."""
+    duration_s: float
+    avg_speed_kmh: float
+    avg_climb_rate_ms: float
+
+    # Optional phase-specific metrics
+    altitude_gained_m: float | None = None
+    max_speed_kmh: float | None = None
+    stability_score: float | None = None  # roll/pitch variance (0-1)
+    efficiency_vs_baseline_pct: float | None = None
+
+
+def compute_phase_metrics(
+    fixes: list[Fix],
+    metrics: list[FixMetrics],
+    boundaries: PhaseBoundaries,
+) -> dict[str, PhaseMetrics]:
+    """Compute per-phase metrics for winch launch analysis.
+
+    Returns a dict with 'initial', 'mid', 'late' keys, each containing PhaseMetrics.
+    """
+    result = {}
+
+    if not fixes or not metrics:
+        return result
+
+    move_start = next(
+        (i for i, m in enumerate(metrics) if m.ground_speed_kmh > 15), 0
+    )
+    release_idx = boundaries.release_fix_seq or len(fixes) - 1
+
+    def compute_segment_metrics(start_idx: int, end_idx: int) -> PhaseMetrics:
+        """Helper to compute metrics for a segment."""
+        if start_idx >= end_idx or start_idx >= len(fixes):
+            return PhaseMetrics(0, 0, 0)
+
+        segment_metrics = metrics[start_idx:end_idx + 1]
+        segment_fixes = fixes[start_idx:end_idx + 1]
+
+        duration = (fixes[end_idx].timestamp - fixes[start_idx].timestamp).total_seconds()
+        avg_speed = sum(m.ground_speed_kmh for m in segment_metrics) / len(segment_metrics) if segment_metrics else 0
+        avg_climb = sum(m.climb_rate_ms for m in segment_metrics) / len(segment_metrics) if segment_metrics else 0
+
+        alt_gain = _altitude_for_display(segment_fixes[-1]) - _altitude_for_display(segment_fixes[0])
+        max_speed = max((m.ground_speed_kmh for m in segment_metrics), default=0)
+
+        return PhaseMetrics(
+            duration_s=round(duration, 2),
+            avg_speed_kmh=round(avg_speed, 2),
+            avg_climb_rate_ms=round(avg_climb, 2),
+            altitude_gained_m=round(alt_gain, 1),
+            max_speed_kmh=round(max_speed, 2),
+        )
+
+    # Initial phase: from takeoff to 80m or release
+    initial_end = boundaries.tow_phase_end_fix_seq if boundaries.tow_phase_end_fix_seq else release_idx
+    if move_start < initial_end:
+        result["initial"] = compute_segment_metrics(move_start, initial_end)
+
+    # Mid phase: from initial end to mid end or release
+    if boundaries.tow_phase_end_fix_seq and boundaries.mid_phase_end_fix_seq:
+        if boundaries.tow_phase_end_fix_seq < boundaries.mid_phase_end_fix_seq:
+            result["mid"] = compute_segment_metrics(
+                boundaries.tow_phase_end_fix_seq,
+                boundaries.mid_phase_end_fix_seq,
+            )
+    elif boundaries.tow_phase_end_fix_seq and boundaries.tow_phase_end_fix_seq < release_idx:
+        # No clear mid phase end found, use release as boundary
+        result["mid"] = compute_segment_metrics(
+            boundaries.tow_phase_end_fix_seq,
+            release_idx,
+        )
+
+    # Late phase: from mid end (or initial end) to release
+    late_start_idx = boundaries.mid_phase_end_fix_seq if boundaries.mid_phase_end_fix_seq else (
+        boundaries.tow_phase_end_fix_seq if boundaries.tow_phase_end_fix_seq else move_start
+    )
+    if late_start_idx < release_idx:
+        late_metrics = compute_segment_metrics(late_start_idx, release_idx)
+        late_metrics.altitude_gained_m = boundaries.release_altitude_m - _altitude_for_display(fixes[late_start_idx])
+        result["late"] = late_metrics
+
+    return result
 
 
 def to_dict(obj) -> dict:
