@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes } from "react-router-dom";
+import { AuthGate } from "./components/AuthGate";
 import Area from "./pages/Area";
 import Compare from "./pages/Compare";
 import Dashboard from "./pages/Dashboard";
@@ -7,6 +8,14 @@ import Statistics from "./pages/Statistics";
 import Weather from "./pages/Weather";
 
 export default function App() {
+  return (
+    <AuthGate>
+      <AppShell />
+    </AuthGate>
+  );
+}
+
+function AppShell() {
   return (
     <div className="app">
       <nav className="nav">

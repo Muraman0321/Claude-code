@@ -7,9 +7,6 @@ export function FileUpload({ onDone }: { onDone: () => void }) {
   const [results, setResults] = useState<UploadResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [driveUrl, setDriveUrl] = useState("");
-  const [driveBusy, setDriveBusy] = useState(false);
-  const [driveError, setDriveError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function handleFiles(files: FileList | File[]) {
@@ -26,21 +23,6 @@ export function FileUpload({ onDone }: { onDone: () => void }) {
     } finally {
       setBusy(false);
       setProgress(null);
-    }
-  }
-
-  async function importDrive() {
-    if (!driveUrl.trim()) return;
-    setDriveBusy(true);
-    setDriveError(null);
-    try {
-      const r = await api.importDriveFolder(driveUrl.trim());
-      setResults(r);
-      onDone();
-    } catch (e: unknown) {
-      setDriveError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setDriveBusy(false);
     }
   }
 
@@ -85,37 +67,6 @@ export function FileUpload({ onDone }: { onDone: () => void }) {
           </>
         )}
       </div>
-      <div style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #d0d7de", borderRadius: "6px", background: "#f6f8fa" }}>
-        <h3 style={{ margin: "0 0 0.4rem", fontSize: "0.95rem" }}>📁 Google Drive フォルダから一括取り込み</h3>
-        <p style={{ margin: "0 0 0.5rem", fontSize: "0.78rem", color: "#57606a" }}>
-          フォルダの共有設定を「<strong>リンクを知っている全員</strong>」にしてからURLを貼ってください。
-          フォルダ内の <code>.igc</code> ファイル全てを取り込みます。
-        </p>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <input
-            type="url"
-            value={driveUrl}
-            onChange={(e) => setDriveUrl(e.target.value)}
-            placeholder="https://drive.google.com/drive/folders/..."
-            style={{ flex: "1 1 280px", minWidth: 0 }}
-            disabled={driveBusy}
-          />
-          <button onClick={importDrive} disabled={driveBusy || !driveUrl.trim()}>
-            {driveBusy ? "取り込み中..." : "取り込み"}
-          </button>
-        </div>
-        {driveError && (
-          <div style={{ marginTop: "0.4rem", color: "#cf222e", fontSize: "0.82rem" }}>
-            ✗ {driveError}
-          </div>
-        )}
-        {driveBusy && (
-          <div style={{ marginTop: "0.4rem", fontSize: "0.78rem", color: "#57606a" }}>
-            Drive からダウンロード中... ファイル数によっては時間がかかります
-          </div>
-        )}
-      </div>
-
       {results.length > 0 && (
         <div className="upload-results">
           {results.map((r, i) => (

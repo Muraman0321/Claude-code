@@ -25,3 +25,8 @@ dist/
 
 # Local data
 backend/uploads/
+
+# Environment variables (never commit)
+.env
+.env.local
+.env*.local

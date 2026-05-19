@@ -1,110 +1,85 @@
-# iPadからセットアップする手順 (Render.com 無料デプロイ)
+# iPad / スマホから使う
 
-Render.com に無料デプロイすれば、iPadのSafariからURLでアクセスできます。
-全てブラウザだけで完結します（クレジットカード不要）。
+URL を踏むだけでアプリが動きます（解析はブラウザ側で完結するため、サーバが寝ていても影響しません）。初回セットアップだけ PC で 5-10 分必要です。
 
 ---
 
 ## 必要なもの
 
-- iPad の Safari (or Chrome)
-- GitHub アカウント（このリポジトリのオーナー）
-- Render.com アカウント（GitHubでサインインできます）
+- iPad / iPhone / Android の Safari または Chrome
+- GitHub アカウント（このリポジトリのオーナー、または fork オーナー）
+- Render.com アカウント（GitHub ログイン可、クレジットカード不要）
+- Supabase アカウント（GitHub ログイン可、無料プラン、クレジットカード不要）
 
 ---
 
-## 手順
+## セットアップ手順（PC で 1 回だけ）
 
-### 1. Render にサインアップ
+### Step 1: Supabase プロジェクト作成
 
-1. Safari で <https://render.com> を開く
-2. 右上「**Get Started**」→「**GitHub**」でサインイン
-3. 自分の GitHub アカウントを認証
+1. <https://supabase.com> → **Start your project** → GitHub サインイン
+2. **New project** → 名前任意、Region は東京推奨、Database password を設定
+3. プロジェクト起動後、左メニュー **SQL Editor** → **New query**
+4. リポジトリの `supabase/schema.sql` の中身を**全て**コピペして **Run**
+5. 左メニュー **Storage** → **New bucket** → 名前 `fixes`、Public off → **Save**
+6. 左メニュー **Project Settings** → **API** で下記をメモ
+   - **Project URL** （`https://xxxxx.supabase.co`）
+   - **anon public** key（公開用 JWT。ブラウザに露出する想定で OK）
 
-### 2. リポジトリを Render に接続
+### Step 2: Render に Static Site をデプロイ
 
-1. Render ダッシュボードで「**+ New**」→「**Blueprint**」を選択
-2. 「**Connect a repository**」で `muraman0321/claude-code` を選択
-   - 初回は GitHub のリポジトリアクセス許可ダイアログが出るので、
-     `claude-code` リポジトリのアクセスを許可
-3. 「**Branch**」で `claude/glider-flight-analyzer-a5J8M` を選択
-4. Render が自動でリポジトリ内の `render.yaml` を読み込みます
-5. 「**Apply**」をタップ
+1. <https://render.com> → **Get Started** → GitHub サインイン
+2. **+ New** → **Blueprint** → リポジトリ `muraman0321/Claude-code` を選択
+3. **Branch** は `claude/glider-flight-analyzer-a5J8M` を選択
+4. `render.yaml` が自動で読み込まれ、`glider-analyzer` という **Static Site** が作成される
+5. Service が作成されたら **Environment** タブで下記を入力 → **Save Changes**
+   - `VITE_SUPABASE_URL` = Step 1 でメモした URL
+   - `VITE_SUPABASE_ANON_KEY` = Step 1 でメモした anon key
+6. **Manual Deploy** → **Clear build cache & deploy** で再ビルド
+7. 数分後に `https://glider-analyzer-xxxx.onrender.com` が払い出される
 
-### 3. ビルド完了を待つ
+### Step 3: スマホで開く
 
-- 初回ビルドは 5〜10 分かかります（Python + Node のインストール、React ビルド）
-- 「**Logs**」タブでビルド進捗が見られます
-- 「Build successful 🎉」→「Deploy live 🚀」が出れば完了
+1. 上記 URL を Safari / Chrome で開く
+2. 自動で「ゲストモード」（匿名サインイン）が始まり、すぐ使える
+3. 「**IGCファイルをアップロード**」エリアをタップ → iCloud / Files / カメラロールから `.igc` を選択
+4. 解析はブラウザ内で実行 → Supabase に保存される
 
-### 4. アクセス
+### 別端末と同期する
 
-- ダッシュボードに表示される URL（例: `https://glider-analyzer-xxxx.onrender.com`）を
-  iPad の Safari で開く
-- 「**IGCファイルをアップロード**」エリアに iPad の「ファイル」アプリから IGC を
-  ドラッグ&ドロップ、またはタップして選択
+画面上部の **「別端末と同期する」** をタップ → メールアドレス入力 → 受信したログインリンクを開く。別端末でも同じメールでサインインすれば同じデータが見えます。
 
 ---
 
-## 無料プランの注意点
+## 無料プラン上限
 
-| 項目 | 内容 |
-|-----|------|
-| **スリープ** | 15分間アクセスが無いとサービスがスリープし、次回アクセス時に30秒ほど起動待ち |
-| **データベース** | SQLite は `/tmp` に置かれているため、サービス再起動 (≒ スリープ復帰やデプロイ) でアップロード履歴がリセットされます |
-| **ビルド時間** | 月750時間まで無料（実質常時稼働OK） |
-
-→ **長期保存したい場合**は、Render の有料プラン (Persistent Disk) か、
-   Supabase などの外部 PostgreSQL に切り替えてください。
+| サービス | 上限 | 影響 |
+|---|---|---|
+| Render Static Site | 帯域 100GB/月 | 静的配信なので**スリープ無し・メモリ制限無し**（旧 Web Service 構成での 502 は解消） |
+| Supabase Postgres Free | DB 500MB | flights/thermals の行データ用。数千フライト規模なら十分 |
+| Supabase Storage Free | 1GB | 1 フライト ≈ 100KB として約 10,000 フライト保存可 |
+| Supabase 月間アクティブユーザー | 50,000 | 個人利用なら無関係 |
 
 ---
 
 ## トラブルシューティング
 
-### ビルドが失敗する
-
-- Logs の `npm install` や `pip install` のエラーを確認
-- `frontend/package.json` の `dependencies` が正しいか確認
-
-### 起動はするがUIが真っ白
-
-- ブラウザの開発者ツールで `/assets/*.js` が 200 で返るか確認
-- 直す場合は手元で `cd frontend && npm run build` を実行し、`dist/` が生成されることを確認
-
-### アップロードが失敗する
-
-- ファイル名が `yy.mm.dd_<機体>_<選手>[_<備考>].igc` 形式か確認
-  - 日付の区切りは `.` または `_` どちらでもOK
-  - 例: `26.04.11_JA04KH_shin_27_2.igc`、`26_04_12_JA04KH_Tajima.igc`
-
----
-
-## 別の選択肢
-
-### A. PC/Mac でローカル起動 (同じWiFi内のiPadからアクセス)
-
-PC/Mac で以下を実行：
-
-```bash
-# 一度だけ
-cd backend && pip install -r requirements.txt
-cd frontend && npm install && npm run build
-
-# 起動 (PC/Macが起きている間アクセス可能)
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-iPad の Safari で `http://<PC/MacのローカルIP>:8000` にアクセス
-（PC/Mac の IP は「システム設定 → ネットワーク」で確認）
-
-### B. Fly.io / Railway.app
-
-- いずれも GitHub 連携でデプロイ可
-- Render と同様、ブラウザ完結
+| 症状 | 対応 |
+|---|---|
+| 画面が真っ白、コンソールに `Supabase env vars are missing` | Render の Environment に `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` を設定して再デプロイ |
+| アップロードで `not signed in` | ページをリロードして匿名サインインを走らせ直す |
+| 別端末で同じデータが見えない | 双方の端末で**同じメールアドレス**の Magic Link でサインインしているか確認 |
+| `.igc` がエラーで弾かれる | ファイル名が `yy.mm.dd_<機体>_<選手>_<備考>.igc` 形式か確認（日付区切りは `.` / `_` どちらも可） |
+| Render の Build が `npm run build` で失敗 | ローカルで `cd frontend && npm install && npm run build` を試して TypeScript エラーを修正 |
 
 ---
 
 ## アップデート方法
 
-このブランチ (`claude/glider-flight-analyzer-a5J8M`) に新しい commit が push されると、
-Render は自動で再ビルド・再デプロイします。何もする必要はありません。
+このブランチに新しい commit を push すれば、Render が自動で再ビルド・再デプロイします。Supabase スキーマを変更した場合のみ、Supabase SQL Editor で再度 `schema.sql` を流してください（idempotent な作りになっています）。
+
+---
+
+## 旧構成（FastAPI + SQLite on Render Web Service）から移行する場合
+
+旧サーバ側 SQLite のデータは Render 再起動時にどのみち消えるため、新システムへの「データ移行」は基本的に不要です。手元に `.igc` ファイルが残っていれば、新 URL で再アップロードすれば同じ解析結果が得られます。
