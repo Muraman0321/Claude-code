@@ -151,8 +151,8 @@ function thermalRowToShape(t: ThermalRow): Thermal {
   };
 }
 
-async function fixesPath(owner: string, flightId: number): Promise<string> {
-  return `${owner}/${flightId}.json`;
+async function fixesPath(flightId: number): Promise<string> {
+  return `${flightId}.json`;
 }
 
 export async function getFlight(id: number): Promise<FlightDetail> {
@@ -171,8 +171,7 @@ export async function getFlight(id: number): Promise<FlightDetail> {
     .order("start_time");
   if (thErr) throw new Error(thErr.message);
 
-  const owner = await currentOwner();
-  const fixes = await downloadFixes(owner, id);
+  const fixes = await downloadFixes(id);
 
   return {
     ...summary,
@@ -181,8 +180,8 @@ export async function getFlight(id: number): Promise<FlightDetail> {
   };
 }
 
-async function downloadFixes(owner: string, flightId: number): Promise<Fix[]> {
-  const path = await fixesPath(owner, flightId);
+async function downloadFixes(flightId: number): Promise<Fix[]> {
+  const path = await fixesPath(flightId);
   const { data, error } = await supabase.storage.from(FIXES_BUCKET).download(path);
   if (error) {
     if (/not.*found/i.test(error.message)) return [];
@@ -203,8 +202,8 @@ async function downloadFixes(owner: string, flightId: number): Promise<Fix[]> {
   );
 }
 
-async function uploadFixes(owner: string, flightId: number, fixes: ImportFix[]): Promise<void> {
-  const path = await fixesPath(owner, flightId);
+async function uploadFixes(flightId: number, fixes: ImportFix[]): Promise<void> {
+  const path = await fixesPath(flightId);
   const json = JSON.stringify(fixes);
   const blob = new Blob([json], { type: "application/json" });
   const { error } = await supabase.storage
@@ -213,8 +212,8 @@ async function uploadFixes(owner: string, flightId: number, fixes: ImportFix[]):
   if (error) throw new Error(`fixes upload: ${error.message}`);
 }
 
-async function deleteFixesFile(owner: string, flightId: number): Promise<void> {
-  const path = await fixesPath(owner, flightId);
+async function deleteFixesFile(flightId: number): Promise<void> {
+  const path = await fixesPath(flightId);
   // Don't throw on missing — best-effort cleanup.
   await supabase.storage.from(FIXES_BUCKET).remove([path]);
 }
@@ -286,7 +285,7 @@ export async function saveFlight(
     if (thErr) throw new Error(thErr.message);
   }
 
-  await uploadFixes(owner, flightId, payload.fixes);
+  await uploadFixes(flightId, payload.fixes);
   return { flight_id: flightId };
 }
 
@@ -294,7 +293,7 @@ export async function deleteFlight(id: number): Promise<void> {
   const owner = await currentOwner();
   const { error } = await supabase.from("flights").delete().eq("id", id);
   if (error) throw new Error(error.message);
-  await deleteFixesFile(owner, id);
+  await deleteFixesFile(id);
 }
 
 export async function updateWeather(
@@ -366,7 +365,6 @@ export async function listAllThermals(): Promise<ThermalLight[]> {
 /** Track points for the comparison view. Each track downsampled to ~maxPoints. */
 export async function listTracks(ids: number[], maxPoints = 120): Promise<FlightTrack[]> {
   if (ids.length === 0) return [];
-  const owner = await currentOwner();
   const { data: flightData, error } = await supabase
     .from("flights")
     .select("id, pilot, aircraft")
@@ -375,7 +373,7 @@ export async function listTracks(ids: number[], maxPoints = 120): Promise<Flight
 
   const results: FlightTrack[] = [];
   for (const f of flightData as { id: number; pilot: string; aircraft: string }[]) {
-    const fixes = await downloadFixes(owner, f.id);
+    const fixes = await downloadFixes(f.id);
     const step = Math.max(1, Math.floor(fixes.length / maxPoints));
     const points = [] as { lat: number; lon: number }[];
     for (let i = 0; i < fixes.length; i += step) {
