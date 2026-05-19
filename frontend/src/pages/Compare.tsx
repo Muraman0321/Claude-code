@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Circle, MapContainer, Polygon, Polyline, TileLayer, Tooltip } from "react-leaflet";
 import { api } from "../api/client";
-import { CompareBarChart } from "../components/Charts";
 import type { FlightSummary, FlightTrack, ThermalLight } from "../types";
 import { fmtDate, fmtDuration, fmtNum } from "../utils/format";
 
@@ -115,14 +114,13 @@ export default function Compare() {
   const [sortDesc, setSortDesc] = useState(true);
   const [filterPilot, setFilterPilot] = useState("");
   const [filterAircraft, setFilterAircraft] = useState("");
-  const [showMap, setShowMap] = useState(false);
   const [tracks, setTracks] = useState<FlightTrack[]>([]);
   const [loadingTracks, setLoadingTracks] = useState(false);
   const [thermals, setThermals] = useState<ThermalLight[]>([]);
   const [showThermals, setShowThermals] = useState(true);
   const [thermalMode, setThermalMode] = useState<"circle" | "rounded">("circle");
   const [filterMinute, setFilterMinute] = useState<number | null>(null);
-  const [trackOpacity, setTrackOpacity] = useState(0.7);
+  const [trackOpacity, setTrackOpacity] = useState(0.5);
 
   useEffect(() => {
     api.listFlights().then(setFlights).catch(console.error);
@@ -211,12 +209,15 @@ export default function Compare() {
   const flightIdKey = selectedFlights.map((f) => f.id).join(",");
 
   useEffect(() => {
-    if (showMap) {
+    if (selectedFlights.length > 0) {
       loadTracks().catch(console.error);
       loadThermals().catch(console.error);
+    } else {
+      setTracks([]);
+      setThermals([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showMap, flightIdKey]);
+  }, [flightIdKey]);
 
   const visibleThermals = useMemo(() => {
     if (!showThermals) return [];
@@ -297,43 +298,8 @@ export default function Compare() {
       {selectedFlights.length > 0 && (
         <>
           <div className="card">
-            <h2>比較サマリー</h2>
-            <div style={{ overflowX: "auto" }}>
-              <CompareBarChart
-                data={selectedFlights.map((f) => {
-                  const hours = (f.duration_s ?? 0) / 3600;
-                  return {
-                    label: `${f.pilot}/${f.aircraft}/${fmtDate(f.flight_date)}`,
-                    "平均上昇率(m/s)": f.avg_climb_in_thermals_ms ?? 0,
-                    "平均速度(km/h)": f.avg_ground_speed_kmh ?? 0,
-                    "距離(km)": f.total_distance_km ?? 0,
-                    "サーマル密度(件/h)": hours > 0 ? (f.thermal_count ?? 0) / hours : 0,
-                  };
-                })}
-                metrics={[
-                  { key: "平均上昇率(m/s)", label: "平均上昇率 (m/s)", color: "#1a7f37" },
-                  { key: "平均速度(km/h)", label: "平均速度 (km/h)", color: "#6f42c1" },
-                  { key: "距離(km)", label: "距離 (km)", color: "#1f6feb" },
-                  { key: "サーマル密度(件/h)", label: "サーマル密度 (件/h)", color: "#e07b00" },
-                ]}
-              />
-            </div>
-          </div>
-
-          <div className="card">
-            <h2>
-              軌跡の重ね合わせ{" "}
-              <label style={{ fontSize: "0.85rem", fontWeight: "normal", marginLeft: "1rem" }}>
-                <input
-                  type="checkbox"
-                  checked={showMap}
-                  onChange={(e) => setShowMap(e.target.checked)}
-                />{" "}
-                マップに描画 ({selectedFlights.length}件)
-              </label>
-            </h2>
-            {showMap && (
-              <div style={{ marginBottom: "0.75rem", display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "center", fontSize: "0.88rem" }}>
+            <h2>マップ ({selectedFlights.length} 件)</h2>
+            <div style={{ marginBottom: "0.75rem", display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "center", fontSize: "0.88rem" }}>
                 <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                   経路透明度:
                   <input
@@ -401,20 +367,18 @@ export default function Compare() {
                     </span>
                   </>
                 )}
-              </div>
-            )}
-            {showMap ? (
-              loadingTracks ? (
-                <div className="empty">トラック取得中...</div>
-              ) : tracks.length === 0 ? (
-                <div className="empty">軌跡データがありません</div>
-              ) : (
-                <div className="map-container">
-                  <MapContainer center={mapCenter} zoom={11} style={{ height: "100%", width: "100%" }}>
-                    <TileLayer
-                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    />
+            </div>
+            {loadingTracks ? (
+              <div className="empty">トラック取得中...</div>
+            ) : tracks.length === 0 ? (
+              <div className="empty">軌跡データがありません</div>
+            ) : (
+              <div className="map-container">
+                <MapContainer center={mapCenter} zoom={11} style={{ height: "100%", width: "100%" }}>
+                  <TileLayer
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  />
                     {tracks.map((t, i) => (
                       <Polyline
                         key={t.flight_id}
@@ -475,12 +439,7 @@ export default function Compare() {
                         </Circle>
                       );
                     })}
-                  </MapContainer>
-                </div>
-              )
-            ) : (
-              <div className="empty" style={{ padding: "1rem" }}>
-                チェックを入れるとマップに軌跡を表示します（重い場合は選択を絞ってください）
+                </MapContainer>
               </div>
             )}
           </div>

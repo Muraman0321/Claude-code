@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
-  Cell,
   Legend,
+  Line,
+  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Scatter,
@@ -15,9 +14,7 @@ import {
 } from "recharts";
 import { api } from "../api/client";
 import {
-  computeAltitudeBudget,
   computePilotThermalStats,
-  type AltitudeSegment,
   type PilotThermalStats,
 } from "../lib/stats/pilotAnalysis";
 import type { FlightDetail, FlightSummary, ThermalLight } from "../types";
@@ -165,151 +162,208 @@ function ThermalEfficiencyTab({
   );
 }
 
-// ─── AltitudeBudgetTab ────────────────────────────────────────────────────────
+// ─── FlightTrendTab ────────────────────────────────────────────────────────────
 
-interface WaterfallEntry {
-  name: string;
-  base: number;
-  value: number;
-  type: "thermal" | "cruise";
-  delta: number;
-  durationS: number;
+const TOW_COLORS = ["#1f6feb", "#1a7f37", "#cf222e", "#9a6700", "#6f42c1"];
+
+function buildTowProfile(
+  detail: FlightDetail,
+): { t: number; alt: number }[] {
+  const fixes = detail.fixes;
+  if (fixes.length < 5) return [];
+
+  // Find takeoff: first fix where ground_speed > 15 km/h
+  let startIdx = 0;
+  for (let i = 0; i < fixes.length; i++) {
+    if ((fixes[i].ground_speed_kmh ?? 0) > 15) { startIdx = i; break; }
+  }
+
+  // Tow ends when altitude has risen ≥ 50 m from takeoff AND climb goes negative
+  const takeoffAlt = fixes[startIdx].altitude_m;
+  let endIdx = Math.min(startIdx + 60, fixes.length - 1);
+  let peakAlt = takeoffAlt;
+  for (let i = startIdx; i < fixes.length; i++) {
+    const alt = fixes[i].altitude_m;
+    if (alt > peakAlt) peakAlt = alt;
+    if (peakAlt - takeoffAlt >= 50 && (fixes[i].climb_rate_ms ?? 0) < 0) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  const t0 = new Date(fixes[startIdx].timestamp).getTime();
+  return fixes.slice(startIdx, endIdx + 1).map((f) => ({
+    t: Math.round((new Date(f.timestamp).getTime() - t0) / 1000),
+    alt: Math.round(f.altitude_m - takeoffAlt),
+  }));
 }
 
-function AltitudeBudgetTab({
+function FlightTrendTab({
+  pilot,
   flights,
-  selectedFlightId,
-  onSelectFlight,
-  segments,
-  waterfallData,
-  loading,
+  pilotThermals,
+  allThermals,
+  allFlights,
 }: {
+  pilot: string;
   flights: FlightSummary[];
-  selectedFlightId: number | null;
-  onSelectFlight: (id: number) => void;
-  segments: AltitudeSegment[];
-  waterfallData: WaterfallEntry[];
-  loading: boolean;
+  pilotThermals: ThermalLight[];
+  allThermals: ThermalLight[];
+  allFlights: FlightSummary[];
 }) {
-  const totalGained = segments
-    .filter((s) => s.type === "thermal")
-    .reduce((sum, s) => sum + s.deltaAlt, 0);
-  const totalLost = segments
-    .filter((s) => s.type === "cruise")
-    .reduce((sum, s) => sum + Math.abs(s.deltaAlt), 0);
-  const netChange = segments.reduce((sum, s) => sum + s.deltaAlt, 0);
+  const [towDetails, setTowDetails] = useState<FlightDetail[]>([]);
+  const [towLoading, setTowLoading] = useState(false);
+
+  // Load last 5 flights for tow profiles
+  useEffect(() => {
+    if (!pilot || flights.length === 0) { setTowDetails([]); return; }
+    const last5 = [...flights]
+      .sort((a, b) => b.flight_date.localeCompare(a.flight_date))
+      .slice(0, 5);
+    setTowLoading(true);
+    Promise.all(last5.map((f) => api.getFlight(f.id)))
+      .then(setTowDetails)
+      .catch(console.error)
+      .finally(() => setTowLoading(false));
+  }, [pilot, flights]);
+
+  const towProfiles = useMemo(
+    () => towDetails.map((d) => ({ id: d.id, date: d.flight_date, points: buildTowProfile(d) })),
+    [towDetails],
+  );
+
+  // Build merged dataset for LineChart (key = seconds)
+  const maxT = towProfiles.reduce((m, p) => Math.max(m, ...p.points.map((pt) => pt.t)), 0);
+  const towChartData: Record<string, number | string>[] = [];
+  for (let t = 0; t <= maxT; t += 2) {
+    const entry: Record<string, number | string> = { t };
+    for (const prof of towProfiles) {
+      const closest = prof.points.reduce(
+        (best, pt) => (Math.abs(pt.t - t) < Math.abs(best.t - t) ? pt : best),
+        prof.points[0] ?? { t: 0, alt: 0 },
+      );
+      if (closest && Math.abs(closest.t - t) <= 3) {
+        entry[prof.date] = closest.alt;
+      }
+    }
+    towChartData.push(entry);
+  }
+
+  // Soaring stats
+  const pilotStats = computePilotThermalStats(pilotThermals);
+  const allStats = computePilotThermalStats(allThermals);
+  const pilotHours = allFlights
+    .filter((f) => f.pilot === pilot)
+    .reduce((s, f) => s + (f.duration_s ?? 0) / 3600, 0);
+  const allHours = allFlights.reduce((s, f) => s + (f.duration_s ?? 0) / 3600, 0);
+
+  const soaringRows: { label: string; pilot: string; all: string; better: boolean }[] = [
+    {
+      label: "サーマル数 / 飛行時間 (件/h)",
+      pilot: pilotHours > 0 ? (pilotStats.count / pilotHours).toFixed(2) : "—",
+      all: allHours > 0 ? (allStats.count / allHours).toFixed(2) : "—",
+      better: pilotHours > 0 && allHours > 0 && pilotStats.count / pilotHours > allStats.count / allHours,
+    },
+    {
+      label: "平均上昇率 (m/s)",
+      pilot: fmtNum(pilotStats.avgClimbRate),
+      all: fmtNum(allStats.avgClimbRate),
+      better: pilotStats.avgClimbRate > allStats.avgClimbRate,
+    },
+    {
+      label: "最高上昇率 (m/s)",
+      pilot: fmtNum(pilotStats.bestClimbRate),
+      all: fmtNum(allStats.bestClimbRate),
+      better: pilotStats.bestClimbRate > allStats.bestClimbRate,
+    },
+    {
+      label: "平均獲得高度 (m)",
+      pilot: Math.round(pilotStats.avgAltGain).toString(),
+      all: Math.round(allStats.avgAltGain).toString(),
+      better: pilotStats.avgAltGain > allStats.avgAltGain,
+    },
+    {
+      label: "平均サーマル時間 (秒)",
+      pilot: Math.round(pilotStats.avgDurationS).toString(),
+      all: Math.round(allStats.avgDurationS).toString(),
+      better: false,
+    },
+  ];
 
   return (
     <div>
-      <div style={{ marginBottom: "1rem", display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-        <label style={{ fontWeight: 600 }}>フライト：</label>
-        <select
-          value={selectedFlightId ?? ""}
-          onChange={(e) => onSelectFlight(Number(e.target.value))}
-          style={{ padding: "0.3rem 0.6rem", borderRadius: "4px", border: "1px solid #d1d5db" }}
-        >
-          {flights.length === 0 && <option value="">（フライトなし）</option>}
-          {flights.map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.flight_date} · {Math.round((f.duration_s ?? 0) / 60)}分 · {f.aircraft}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {loading ? (
-        <div style={{ textAlign: "center", padding: "3rem", color: "#6b7280" }}>
-          読み込み中...
-        </div>
-      ) : waterfallData.length > 0 ? (
-        <>
-          <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
-            <StatCard
-              label="サーマル獲得"
-              value={`+${Math.round(totalGained)} m`}
-              color="#16a34a"
-            />
-            <StatCard
-              label="クルーズ降下"
-              value={`-${Math.round(totalLost)} m`}
-              color="#dc2626"
-            />
-            <StatCard
-              label="正味高度変化"
-              value={`${netChange >= 0 ? "+" : ""}${Math.round(netChange)} m`}
-              color={netChange >= 0 ? "#16a34a" : "#dc2626"}
-            />
-            <StatCard
-              label="セグメント数"
-              value={`S${segments.filter((s) => s.type === "thermal").length} / G${segments.filter((s) => s.type === "cruise").length}`}
-            />
-          </div>
-
-          <h3 style={{ margin: "0 0 0.25rem", fontSize: "1rem" }}>高度バンク管理</h3>
-          <p style={{ margin: "0 0 1rem", color: "#6b7280", fontSize: "0.85rem" }}>
-            緑 = サーマル上昇（S）、赤 = クルーズ降下（G）。バーの位置と高さ = 実際の高度帯。
-          </p>
-          <ResponsiveContainer width="100%" height={400}>
-            <BarChart
-              data={waterfallData}
-              margin={{ top: 10, right: 20, bottom: 60, left: 60 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 10 }}
-                angle={-45}
-                textAnchor="end"
-                interval={0}
-              />
-              <YAxis
-                tickFormatter={(v) => `${v}m`}
-                label={{ value: "高度 (m)", angle: -90, position: "insideLeft", offset: -15 }}
-              />
-              <Tooltip
-                content={({ payload, label }) => {
-                  if (!payload?.length) return null;
-                  const d = payload[0]?.payload as WaterfallEntry;
-                  if (!d) return null;
-                  return (
-                    <div
-                      style={{
-                        background: "#1f2937",
-                        color: "#f9fafb",
-                        padding: "0.5rem 0.75rem",
-                        borderRadius: "6px",
-                        fontSize: "0.85rem",
-                        lineHeight: 1.6,
-                      }}
-                    >
-                      <div>
-                        {label} ({d.type === "thermal" ? "サーマル" : "クルーズ"})
-                      </div>
-                      <div>
-                        高度変化: {d.delta >= 0 ? "+" : ""}
-                        {Math.round(d.delta)} m
-                      </div>
-                      <div>時間: {Math.round(d.durationS)} 秒</div>
-                    </div>
-                  );
-                }}
-              />
-              <Bar dataKey="base" stackId="a" fill="transparent" isAnimationActive={false} />
-              <Bar dataKey="value" stackId="a" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-                {waterfallData.map((entry, i) => (
-                  <Cell
-                    key={i}
-                    fill={entry.type === "thermal" ? "#22c55e" : "#ef4444"}
-                    opacity={0.85}
-                  />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </>
+      {/* 曳航の特徴 */}
+      <h3 style={{ margin: "0 0 0.5rem", fontSize: "1rem", borderBottom: "1px solid #e5e7eb", paddingBottom: "0.4rem" }}>
+        曳航の特徴
+      </h3>
+      <p style={{ margin: "0 0 1rem", color: "#6b7280", fontSize: "0.85rem" }}>
+        直近5フライトの曳航高度プロファイル（離陸からリリースまで、x軸: 経過秒数, y軸: 対地高度）
+      </p>
+      {towLoading ? (
+        <div className="empty">読み込み中...</div>
+      ) : towProfiles.length === 0 ? (
+        <div className="empty">フライトデータがありません</div>
       ) : (
-        <div style={{ textAlign: "center", padding: "3rem", color: "#6b7280" }}>
-          フライトを選択してください
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={towChartData} margin={{ top: 10, right: 30, left: 0, bottom: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="t" label={{ value: "経過時間 (秒)", position: "bottom", offset: 10 }} />
+            <YAxis label={{ value: "対地高度 (m)", angle: -90, position: "insideLeft" }} />
+            <Tooltip />
+            <Legend />
+            {towProfiles.map((prof, i) => (
+              <Line
+                key={prof.id}
+                type="monotone"
+                dataKey={prof.date}
+                stroke={TOW_COLORS[i % TOW_COLORS.length]}
+                dot={false}
+                connectNulls
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+
+      {/* ソアリングの特徴 */}
+      <h3 style={{ margin: "1.5rem 0 0.5rem", fontSize: "1rem", borderBottom: "1px solid #e5e7eb", paddingBottom: "0.4rem" }}>
+        ソアリングの特徴
+      </h3>
+      <p style={{ margin: "0 0 1rem", color: "#6b7280", fontSize: "0.85rem" }}>
+        {pilot} の全フライトのソアリング指標と全データ平均の比較
+      </p>
+      {pilotThermals.length === 0 ? (
+        <div className="empty">サーマルデータがありません</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "380px" }}>
+            <thead>
+              <tr style={{ background: "#f3f4f6" }}>
+                <th style={{ padding: "0.6rem 1rem", textAlign: "left", fontWeight: 600, borderBottom: "2px solid #e5e7eb" }}>指標</th>
+                <th style={{ padding: "0.6rem 1rem", textAlign: "right", color: "#6366f1", fontWeight: 600, borderBottom: "2px solid #e5e7eb" }}>{pilot}</th>
+                <th style={{ padding: "0.6rem 1rem", textAlign: "right", color: "#6b7280", fontWeight: 600, borderBottom: "2px solid #e5e7eb" }}>全データ平均</th>
+              </tr>
+            </thead>
+            <tbody>
+              {soaringRows.map((row, i) => (
+                <tr key={row.label} style={{ background: i % 2 === 0 ? "white" : "#f9fafb" }}>
+                  <td style={{ padding: "0.5rem 1rem", borderBottom: "1px solid #f3f4f6" }}>{row.label}</td>
+                  <td style={{
+                    padding: "0.5rem 1rem",
+                    textAlign: "right",
+                    borderBottom: "1px solid #f3f4f6",
+                    fontWeight: row.better ? "bold" : "normal",
+                    color: row.better ? "#16a34a" : "#374151",
+                  }}>
+                    {row.pilot} {row.better ? "▲" : ""}
+                  </td>
+                  <td style={{ padding: "0.5rem 1rem", textAlign: "right", borderBottom: "1px solid #f3f4f6", color: "#6b7280" }}>
+                    {row.all}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -353,8 +407,7 @@ function CompareTab({
       label: "サーマル数 / 飛行時間 (件/h)",
       a: flightHoursA > 0 ? `${rateA.toFixed(2)} (${statsA.count}/${flightHoursA.toFixed(1)}h)` : "—",
       b: flightHoursB > 0 ? `${rateB.toFixed(2)} (${statsB.count}/${flightHoursB.toFixed(1)}h)` : "—",
-      better:
-        rateA > rateB ? "a" : rateB > rateA ? "b" : "none",
+      better: rateA > rateB ? "a" : rateB > rateA ? "b" : "none",
     },
     {
       label: "平均上昇率 (m/s)",
@@ -561,11 +614,11 @@ function CompareTab({
 
 // ─── PilotAnalysis (main page) ────────────────────────────────────────────────
 
-type Tab = "thermal" | "altitude" | "compare";
+type Tab = "thermal" | "trend" | "compare";
 
 const TAB_LABELS: Record<Tab, string> = {
   thermal: "🌀 サーマル旋回効率",
-  altitude: "📊 高度バンク管理",
+  trend: "📈 フライト傾向分析",
   compare: "👥 パイロット間比較",
 };
 
@@ -577,13 +630,8 @@ export default function PilotAnalysis() {
   const [allThermals, setAllThermals] = useState<ThermalLight[]>([]);
   const [allFlights, setAllFlights] = useState<FlightSummary[]>([]);
   const [flights, setFlights] = useState<FlightSummary[]>([]);
-  const [selectedFlightId, setSelectedFlightId] = useState<number | null>(null);
-  const [flightDetail, setFlightDetail] = useState<FlightDetail | null>(null);
   const [comparePilot, setComparePilot] = useState("");
 
-  const [flightLoading, setFlightLoading] = useState(false);
-
-  // Load pilots and all thermals once
   useEffect(() => {
     api.listPilots().then((p) => {
       setPilots(p);
@@ -601,28 +649,10 @@ export default function PilotAnalysis() {
     return m;
   }, [allFlights]);
 
-  // Load flights for selected pilot
   useEffect(() => {
     if (!pilot) return;
-    api.listFlights({ pilot }).then((f) => {
-      setFlights(f);
-      setSelectedFlightId(f[0]?.id ?? null);
-      setFlightDetail(null);
-    });
+    api.listFlights({ pilot }).then(setFlights);
   }, [pilot]);
-
-  // Load fix data when flight is selected (for altitude budget)
-  useEffect(() => {
-    if (!selectedFlightId) {
-      setFlightDetail(null);
-      return;
-    }
-    setFlightLoading(true);
-    api.getFlight(selectedFlightId).then((d) => {
-      setFlightDetail(d);
-      setFlightLoading(false);
-    });
-  }, [selectedFlightId]);
 
   const pilotThermals = useMemo(
     () => allThermals.filter((t) => t.pilot === pilot),
@@ -639,24 +669,6 @@ export default function PilotAnalysis() {
   const compareStats = useMemo(
     () => computePilotThermalStats(compareThermals),
     [compareThermals],
-  );
-
-  const altitudeSegments = useMemo(
-    () => (flightDetail ? computeAltitudeBudget(flightDetail.fixes) : []),
-    [flightDetail],
-  );
-
-  const waterfallData: WaterfallEntry[] = useMemo(
-    () =>
-      altitudeSegments.map((seg) => ({
-        name: seg.label,
-        base: Math.min(seg.startAlt, seg.endAlt),
-        value: Math.abs(seg.deltaAlt),
-        type: seg.type,
-        delta: seg.deltaAlt,
-        durationS: seg.durationS,
-      })),
-    [altitudeSegments],
   );
 
   return (
@@ -699,7 +711,7 @@ export default function PilotAnalysis() {
           borderBottom: "2px solid #e5e7eb",
         }}
       >
-        {(["thermal", "altitude", "compare"] as Tab[]).map((t) => (
+        {(["thermal", "trend", "compare"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -729,14 +741,13 @@ export default function PilotAnalysis() {
           pilot={pilot}
         />
       )}
-      {tab === "altitude" && (
-        <AltitudeBudgetTab
+      {tab === "trend" && (
+        <FlightTrendTab
+          pilot={pilot}
           flights={flights}
-          selectedFlightId={selectedFlightId}
-          onSelectFlight={setSelectedFlightId}
-          segments={altitudeSegments}
-          waterfallData={waterfallData}
-          loading={flightLoading}
+          pilotThermals={pilotThermals}
+          allThermals={allThermals}
+          allFlights={allFlights}
         />
       )}
       {tab === "compare" && (

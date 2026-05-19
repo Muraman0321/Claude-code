@@ -13,6 +13,9 @@ export interface WeatherSnapshot {
   humidity_pct: number | null;
   dewpoint_c: number | null;
   cloud_base_m: number | null;
+  wind_speed_850hpa_kmh: number | null;
+  wind_speed_700hpa_kmh: number | null;
+  wind_speed_500hpa_kmh: number | null;
   source: string;
 }
 
@@ -24,6 +27,13 @@ const HOURLY_VARS = [
   "surface_pressure",
   "cloud_cover",
   "relative_humidity_2m",
+] as const;
+
+// Pressure-level wind speed variables (requires pressure_level parameter)
+const PRESSURE_LEVEL_VARS = [
+  "wind_speed_850hPa",
+  "wind_speed_700hPa",
+  "wind_speed_500hPa",
 ] as const;
 
 function isoDate(d: Date): string {
@@ -72,7 +82,7 @@ export async function fetchWeather(
   url.searchParams.set("longitude", lon.toFixed(4));
   url.searchParams.set("start_date", isoDate(start));
   url.searchParams.set("end_date", isoDate(end));
-  url.searchParams.set("hourly", HOURLY_VARS.join(","));
+  url.searchParams.set("hourly", [...HOURLY_VARS, ...PRESSURE_LEVEL_VARS].join(","));
   url.searchParams.set("wind_speed_unit", "kmh");
   url.searchParams.set("timezone", "UTC");
 
@@ -133,6 +143,9 @@ export async function fetchWeather(
     humidity_pct: mean(pickHourly(hourly, "relative_humidity_2m", indices)),
     dewpoint_c,
     cloud_base_m,
+    wind_speed_850hpa_kmh: mean(pickHourly(hourly, "wind_speed_850hPa", indices)),
+    wind_speed_700hpa_kmh: mean(pickHourly(hourly, "wind_speed_700hPa", indices)),
+    wind_speed_500hpa_kmh: mean(pickHourly(hourly, "wind_speed_500hPa", indices)),
     source: "open-meteo",
   };
 }

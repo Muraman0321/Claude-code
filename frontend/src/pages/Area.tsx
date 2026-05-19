@@ -12,29 +12,42 @@ import {
 } from "recharts";
 import { api } from "../api/client";
 import { RateHistogramChart } from "../components/Charts";
-import type { AreaBlock, AreaStats, BlockStats, HistogramGroup } from "../types";
+import type { AreaBlock, AreaStats, BlockStats, HistogramBin, ThermalLight } from "../types";
 import { fmtNum } from "../utils/format";
 
-const COMPARE_COLORS = [
-  "#1f6feb", "#1a7f37", "#cf222e", "#9a6700", "#6f42c1",
-  "#1b9aaa", "#e07b00", "#d63384", "#198754", "#0d6efd",
-];
-
 type StatsView = "overall" | "season" | "day";
-
 type Mode = "sectors" | "grid";
 
-// 妻沼グライダー滑空場: 36°12'41" N 139°25'08" E
 const MENUMA = { lat: 36.2114, lon: 139.4189 };
 
-function heatColor(value: number | null, maxValue: number): string {
-  if (value == null || maxValue <= 0) return "#e7eaee";
+// Desired row order for 3×3 grid heatmap
+const BLOCK_ORDER = ["SW", "S", "SE", "W", "C", "E", "NW", "N", "NE"];
+
+// Blue (weak) → Red (strong) color scale
+function thermalColor(t: number, alpha = 0.7): string {
+  const r = Math.round(255 * t);
+  const g = 0;
+  const b = Math.round(255 * (1 - t));
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function blockFillColor(block: AreaBlock, maxClimb: number, selected: boolean): string {
+  if (block.thermal_count === 0) return "#cccccc";
+  const t = block.avg_climb_rate_ms != null && maxClimb > 0
+    ? Math.max(0, Math.min(1, block.avg_climb_rate_ms / maxClimb))
+    : 0;
+  const r = Math.round(255 * t);
+  const g = 0;
+  const b = Math.round(255 * (1 - t));
+  return selected ? `rgba(${r},${g},${b},0.9)` : `rgba(${r},${g},${b},0.55)`;
+}
+
+// Color scale for table cells
+function metricCellStyle(value: number | null, maxValue: number): React.CSSProperties {
+  if (value == null || maxValue <= 0) return {};
   const t = Math.max(0, Math.min(1, value / maxValue));
-  // light yellow -> orange -> red
-  const r = Math.round(255);
-  const g = Math.round(255 - t * 200);
-  const b = Math.round(150 - t * 150);
-  return `rgb(${r},${g},${b})`;
+  const bg = thermalColor(t, 0.35);
+  return { background: bg };
 }
 
 function blockStatsParams(
@@ -57,7 +70,6 @@ function blockStatsParams(
       radius_km: radiusKm,
     };
   }
-  // grid cell: parse "cell_{dx}_{dy}" from id
   const m = /^cell_(-?\d+)_(-?\d+)$/.exec(block.id);
   if (!m) return null;
   return {
@@ -71,20 +83,110 @@ function blockStatsParams(
   };
 }
 
-function blockFillColor(block: AreaBlock, maxClimb: number, selected: boolean): string {
-  if (block.thermal_count === 0) return "#cccccc";
-  const t = block.avg_climb_rate_ms != null && maxClimb > 0
-    ? Math.max(0, Math.min(1, block.avg_climb_rate_ms / maxClimb))
-    : 0;
-  const r = Math.round(255 - t * 100);
-  const g = Math.round(200 - t * 150);
-  const b = Math.round(100 - t * 80);
-  return selected ? `rgba(${r},${g},${b},0.9)` : `rgba(${r},${g},${b},0.55)`;
+// Build a climb-rate histogram from ThermalLight data
+const CLIMB_BINS: { label: string; lo: number; hi: number | null }[] = [
+  { label: "0.0-0.5", lo: 0, hi: 0.5 },
+  { label: "0.5-1.0", lo: 0.5, hi: 1.0 },
+  { label: "1.0-1.5", lo: 1.0, hi: 1.5 },
+  { label: "1.5-2.0", lo: 1.5, hi: 2.0 },
+  { label: "2.0-2.5", lo: 2.0, hi: 2.5 },
+  { label: "2.5-3.0", lo: 2.5, hi: 3.0 },
+  { label: "3.0+",   lo: 3.0, hi: null },
+];
+
+const SEASONS_MAP: { key: string; label: string; months: number[] }[] = [
+  { key: "spring", label: "春 (3-5月)", months: [3, 4, 5] },
+  { key: "summer", label: "夏 (6-8月)", months: [6, 7, 8] },
+  { key: "autumn", label: "秋 (9-11月)", months: [9, 10, 11] },
+  { key: "winter", label: "冬 (12-2月)", months: [12, 1, 2] },
+];
+
+function buildClimbHistogram(
+  thermals: ThermalLight[],
+  seasonKey: string,
+  hourFilter: number | null,
+): HistogramBin[] {
+  const filtered = thermals.filter((t) => {
+    if (hourFilter !== null && t.local_hour !== hourFilter) return false;
+    if (seasonKey) {
+      const month = new Date(t.start_time).getUTCMonth() + 1;
+      const season = SEASONS_MAP.find((s) => s.months.includes(month));
+      if (!season || season.key !== seasonKey) return false;
+    }
+    return true;
+  });
+  return CLIMB_BINS.map((bin) => ({
+    label: bin.label,
+    lo: bin.lo,
+    hi: bin.hi,
+    count: filtered.filter(
+      (t) => t.avg_climb_rate_ms >= bin.lo && (bin.hi === null || t.avg_climb_rate_ms < bin.hi),
+    ).length,
+  }));
 }
+
+// Grid cell thermal heatmap data
+interface HeatCell {
+  lat: number;
+  lon: number;
+  count: number;
+  avgGain: number;
+  strength: number;
+}
+
+function buildThermalHeatmap(
+  thermals: ThermalLight[],
+  seasonKey: string,
+  hourSlot: string,
+): HeatCell[] {
+  const filtered = thermals.filter((t) => {
+    if (seasonKey) {
+      const month = new Date(t.start_time).getUTCMonth() + 1;
+      const season = SEASONS_MAP.find((s) => s.months.includes(month));
+      if (!season || season.key !== seasonKey) return false;
+    }
+    if (hourSlot === "morning" && (t.local_hour < 6 || t.local_hour >= 10)) return false;
+    if (hourSlot === "noon" && (t.local_hour < 10 || t.local_hour >= 14)) return false;
+    if (hourSlot === "afternoon" && (t.local_hour < 14 || t.local_hour >= 18)) return false;
+    return true;
+  });
+
+  const CELL_DEG = 0.02;
+  const cells = new Map<string, ThermalLight[]>();
+  for (const t of filtered) {
+    const latKey = Math.floor(t.center_lat / CELL_DEG) * CELL_DEG;
+    const lonKey = Math.floor(t.center_lon / CELL_DEG) * CELL_DEG;
+    const key = `${latKey.toFixed(4)},${lonKey.toFixed(4)}`;
+    if (!cells.has(key)) cells.set(key, []);
+    cells.get(key)!.push(t);
+  }
+
+  const out: HeatCell[] = [];
+  for (const [key, ts] of cells) {
+    const [lat, lon] = key.split(",").map(Number);
+    const avgGain = ts.reduce((s, t) => s + t.altitude_gain_m, 0) / ts.length;
+    out.push({ lat: lat + CELL_DEG / 2, lon: lon + CELL_DEG / 2, count: ts.length, avgGain, strength: ts.length * avgGain });
+  }
+  return out;
+}
+
+// Sort blocks in desired order for heatmap rows
+function sortedBlocksForHeatmap(blocks: AreaBlock[]): AreaBlock[] {
+  return [...blocks].sort((a, b) => {
+    const ai = BLOCK_ORDER.indexOf(a.label);
+    const bi = BLOCK_ORDER.indexOf(b.label);
+    if (ai === -1 && bi === -1) return a.label.localeCompare(b.label);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+}
+
+// Hours shown in heatmap (06-18 only)
+const HEATMAP_HOURS = Array.from({ length: 13 }, (_, i) => i + 6);
 
 export default function Area() {
   const [mode, setMode] = useState<Mode>("grid");
-  const [compareIds, setCompareIds] = useState<string[]>([]);
   const [centerLat, setCenterLat] = useState(MENUMA.lat);
   const [centerLon, setCenterLon] = useState(MENUMA.lon);
   const [radiusKm, setRadiusKm] = useState(9);
@@ -99,6 +201,21 @@ export default function Area() {
   const [statsView, setStatsView] = useState<StatsView>("overall");
   const [statsError, setStatsError] = useState<string | null>(null);
 
+  // All thermals (for heatmap + histogram)
+  const [allThermals, setAllThermals] = useState<ThermalLight[]>([]);
+
+  // Heatmap filters
+  const [heatSeason, setHeatSeason] = useState("");
+  const [heatHourSlot, setHeatHourSlot] = useState("");
+
+  // Histogram filters
+  const [histSeason, setHistSeason] = useState("");
+  const [histHour, setHistHour] = useState<string>("");
+
+  useEffect(() => {
+    api.allThermals().then(setAllThermals).catch(console.error);
+  }, []);
+
   async function reload() {
     setLoading(true);
     try {
@@ -108,7 +225,6 @@ export default function Area() {
           : await api.areaGrid({ center_lat: centerLat, center_lon: centerLon, cell_km: cellKm, grid_size: gridSize });
       setData(res);
       setSelectedBlock(null);
-      setCompareIds([]);
     } finally {
       setLoading(false);
     }
@@ -129,9 +245,18 @@ export default function Area() {
     return Math.max(0, ...data.blocks.flatMap((b) => b.by_hour.map((h) => h.avg_climb_rate_ms)));
   }, [data]);
 
+  const maxThermalCount = useMemo(() => {
+    if (!data) return 0;
+    return Math.max(1, ...data.blocks.map((b) => b.thermal_count));
+  }, [data]);
+
+  const maxAvgGain = useMemo(() => {
+    if (!data) return 0;
+    return Math.max(1, ...data.blocks.map((b) => b.avg_altitude_gain_m ?? 0));
+  }, [data]);
+
   const selected = useMemo(() => data?.blocks.find((b) => b.id === selectedBlock) ?? null, [data, selectedBlock]);
 
-  // Fetch detailed histograms when a block is selected.
   useEffect(() => {
     if (!data || !selected) {
       setBlockStats(null);
@@ -141,23 +266,35 @@ export default function Area() {
     setLoadingStats(true);
     setStatsError(null);
     const params = blockStatsParams(data, selected, centerLat, centerLon, radiusKm, cellKm);
-    if (!params) {
-      setLoadingStats(false);
-      return;
-    }
+    if (!params) { setLoadingStats(false); return; }
     api.blockStats(params)
-      .then((s) => {
-        setBlockStats(s);
-        setStatsView("overall");
-      })
+      .then((s) => { setBlockStats(s); setStatsView("overall"); })
       .catch((e: unknown) => setStatsError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoadingStats(false));
   }, [data, selected, centerLat, centerLon, radiusKm, cellKm]);
 
+  const heatmapData = useMemo(
+    () => buildThermalHeatmap(allThermals, heatSeason, heatHourSlot),
+    [allThermals, heatSeason, heatHourSlot],
+  );
+
+  const maxHeatStrength = useMemo(
+    () => Math.max(1, ...heatmapData.map((c) => c.strength)),
+    [heatmapData],
+  );
+
+  const histData = useMemo(
+    () => buildClimbHistogram(allThermals, histSeason, histHour !== "" ? Number(histHour) : null),
+    [allThermals, histSeason, histHour],
+  );
+
+  const sortedBlocks = useMemo(() => (data ? sortedBlocksForHeatmap(data.blocks) : []), [data]);
+
   return (
     <div>
-      <h1>エリア分析 (妻沼周辺)</h1>
+      <h1>サーマルエリア分析 (妻沼周辺)</h1>
 
+      {/* 設定 */}
       <div className="card">
         <div className="filters" style={{ alignItems: "center" }}>
           <span>
@@ -230,10 +367,61 @@ export default function Area() {
 
       {loading && <div className="empty">読み込み中...</div>}
 
+      {/* サーマルマップ (新規) */}
+      <div className="card">
+        <h2>サーマルマップ</h2>
+        <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.75rem" }}>
+          全データのサーマル位置を集計し、強さ（頻度 × 平均獲得高度）をヒートマップで表示。青 = 弱い / 赤 = 強い。
+        </p>
+        <div className="filters" style={{ marginBottom: "0.75rem" }}>
+          <select value={heatSeason} onChange={(e) => setHeatSeason(e.target.value)}>
+            <option value="">全季節</option>
+            {SEASONS_MAP.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+          <select value={heatHourSlot} onChange={(e) => setHeatHourSlot(e.target.value)}>
+            <option value="">全時間帯</option>
+            <option value="morning">午前 (06-10時)</option>
+            <option value="noon">昼前 (10-14時)</option>
+            <option value="afternoon">午後 (14-18時)</option>
+          </select>
+          <span style={{ fontSize: "0.85rem", color: "#57606a" }}>
+            {heatmapData.length} セル / サーマル {heatmapData.reduce((s, c) => s + c.count, 0)} 件
+          </span>
+        </div>
+        <div className="map-container">
+          <MapContainer center={[centerLat, centerLon]} zoom={11} style={{ height: "100%", width: "100%" }}>
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            {heatmapData.map((cell, i) => {
+              const t = Math.max(0, Math.min(1, cell.strength / maxHeatStrength));
+              const r = Math.round(255 * t);
+              const b = Math.round(255 * (1 - t));
+              const color = `rgb(${r},0,${b})`;
+              const radius = Math.max(10, Math.min(40, 10 + cell.count * 3));
+              return (
+                <CircleMarker
+                  key={i}
+                  center={[cell.lat, cell.lon]}
+                  radius={radius}
+                  pathOptions={{ color, fillColor: color, fillOpacity: 0.5, weight: 0 }}
+                >
+                  <Tooltip>
+                    サーマル {cell.count}件 / 平均獲得高度 {Math.round(cell.avgGain)}m
+                  </Tooltip>
+                </CircleMarker>
+              );
+            })}
+          </MapContainer>
+        </div>
+      </div>
+
       {data && (
         <>
+          {/* マップ */}
           <div className="card">
-            <h2>マップ — クリックでブロックを選択（色の濃さ = 平均上昇率）</h2>
+            <h2>マップ — クリックでブロックを選択（青=弱い / 赤=強い）</h2>
             <div className="map-container">
               <MapContainer center={[centerLat, centerLon]} zoom={11} style={{ height: "100%", width: "100%" }}>
                 <TileLayer
@@ -266,58 +454,71 @@ export default function Area() {
                   radius={6}
                   pathOptions={{ color: "#0d6efd", fillColor: "#0d6efd", fillOpacity: 1 }}
                 >
-                  <Tooltip permanent direction="top" offset={[0, -6]}>
-                    中心
-                  </Tooltip>
+                  <Tooltip permanent direction="top" offset={[0, -6]}>中心</Tooltip>
                 </CircleMarker>
               </MapContainer>
             </div>
           </div>
 
+          {/* ブロック別サマリー */}
           <div className="card">
             <h2>ブロック別サマリー</h2>
             <table>
               <thead>
                 <tr>
                   <th>ブロック</th>
-                  <th>サーマル数</th>
+                  <th>サーマル密度 (件/h)</th>
                   <th>平均上昇率</th>
                   <th>最大上昇率</th>
                   <th>平均獲得高度</th>
                 </tr>
               </thead>
               <tbody>
-                {data.blocks.map((b) => (
-                  <tr
-                    key={b.id}
-                    onClick={() => setSelectedBlock(b.id)}
-                    style={{
-                      cursor: "pointer",
-                      background: selectedBlock === b.id ? "#ddf4ff" : undefined,
-                    }}
-                  >
-                    <td><strong>{b.label}</strong></td>
-                    <td>{b.thermal_count}</td>
-                    <td>{fmtNum(b.avg_climb_rate_ms, 2, "m/s")}</td>
-                    <td>{fmtNum(b.max_climb_rate_ms, 2, "m/s")}</td>
-                    <td>{fmtNum(b.avg_altitude_gain_m, 0, "m")}</td>
-                  </tr>
-                ))}
+                {data.blocks.map((b) => {
+                  const density = b.total_thermal_time_s > 0
+                    ? (b.thermal_count / (b.total_thermal_time_s / 3600))
+                    : null;
+                  const maxDensity = Math.max(1, ...data.blocks.map((bb) => {
+                    return bb.total_thermal_time_s > 0 ? bb.thermal_count / (bb.total_thermal_time_s / 3600) : 0;
+                  }));
+                  return (
+                    <tr
+                      key={b.id}
+                      onClick={() => setSelectedBlock(b.id)}
+                      style={{ cursor: "pointer", background: selectedBlock === b.id ? "#ddf4ff" : undefined }}
+                    >
+                      <td><strong>{b.label}</strong></td>
+                      <td style={metricCellStyle(density, maxDensity)}>
+                        {density != null ? density.toFixed(1) : "—"}
+                      </td>
+                      <td style={metricCellStyle(b.avg_climb_rate_ms, maxClimb)}>
+                        {fmtNum(b.avg_climb_rate_ms, 2, "m/s")}
+                      </td>
+                      <td style={metricCellStyle(b.max_climb_rate_ms, maxClimb)}>
+                        {fmtNum(b.max_climb_rate_ms, 2, "m/s")}
+                      </td>
+                      <td style={metricCellStyle(b.avg_altitude_gain_m, maxAvgGain)}>
+                        {fmtNum(b.avg_altitude_gain_m, 0, "m")}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
+          {/* 時間帯ヒートマップ (06-18のみ、SW,S,SE,W,C,E,NW,N,NE順) */}
           <div className="card">
             <h2>時間帯ヒートマップ (現地時刻、セル色 = 平均上昇率)</h2>
             <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
-              空白セル = データなし。色が濃いほど強い上昇率。クリックしたブロックの詳細は下の表に表示。
+              空白セル = データなし。青が弱く赤が強い。6〜18時のみ表示。
             </p>
             <div style={{ overflowX: "auto" }}>
               <table>
                 <thead>
                   <tr>
                     <th>ブロック</th>
-                    {Array.from({ length: 24 }, (_, h) => (
+                    {HEATMAP_HOURS.map((h) => (
                       <th key={h} style={{ minWidth: "32px", padding: "0.2rem", fontSize: "0.7rem" }}>
                         {h.toString().padStart(2, "0")}
                       </th>
@@ -325,7 +526,7 @@ export default function Area() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.blocks.map((b) => {
+                  {sortedBlocks.map((b) => {
                     const hourMap = new Map(b.by_hour.map((h) => [h.hour, h]));
                     return (
                       <tr key={b.id}>
@@ -340,8 +541,14 @@ export default function Area() {
                         >
                           {b.label}
                         </td>
-                        {Array.from({ length: 24 }, (_, h) => {
+                        {HEATMAP_HOURS.map((h) => {
                           const cell = hourMap.get(h);
+                          const t = cell && maxHourlyClimb > 0
+                            ? Math.max(0, Math.min(1, cell.avg_climb_rate_ms / maxHourlyClimb))
+                            : 0;
+                          const r = Math.round(255 * t);
+                          const bl = Math.round(255 * (1 - t));
+                          const bg = cell ? `rgb(${r},0,${bl})` : undefined;
                           return (
                             <td
                               key={h}
@@ -350,8 +557,8 @@ export default function Area() {
                                 padding: "0.2rem",
                                 textAlign: "center",
                                 fontSize: "0.7rem",
-                                background: heatColor(cell?.avg_climb_rate_ms ?? null, maxHourlyClimb || 1),
-                                color: cell && cell.avg_climb_rate_ms > maxHourlyClimb * 0.6 ? "#fff" : "#1f2328",
+                                background: bg,
+                                color: cell && t > 0.5 ? "#fff" : "#1f2328",
                               }}
                             >
                               {cell ? cell.avg_climb_rate_ms.toFixed(1) : ""}
@@ -366,190 +573,40 @@ export default function Area() {
             </div>
           </div>
 
+          {/* 全エリア 上昇率ヒストグラム */}
           <div className="card">
-            <h2>ブロック比較 — 時間帯ごとの上昇率</h2>
-            <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
-              比較したいブロックをチェック。現地時刻(時)を横軸、ブロック内サーマルの平均上昇率を縦軸にしたヒストグラム一覧。
+            <h2>全エリア 上昇率ヒストグラム</h2>
+            <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.75rem" }}>
+              全サーマルの平均上昇率分布。季節別・時間帯別フィルター適用可能。
             </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 0.9rem", marginBottom: "0.75rem" }}>
-              {data.blocks.map((b) => (
-                <label key={b.id} style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}>
-                  <input
-                    type="checkbox"
-                    checked={compareIds.includes(b.id)}
-                    onChange={(e) =>
-                      setCompareIds((prev) =>
-                        e.target.checked ? [...prev, b.id] : prev.filter((x) => x !== b.id),
-                      )
-                    }
-                    disabled={!compareIds.includes(b.id) && b.thermal_count === 0}
-                    style={{ marginRight: "0.25rem" }}
-                  />
-                  {b.label} ({b.thermal_count})
-                </label>
-              ))}
-              {compareIds.length > 0 && (
-                <button className="ghost" onClick={() => setCompareIds([])}>選択解除</button>
-              )}
+            <div className="filters" style={{ marginBottom: "0.75rem" }}>
+              <select value={histSeason} onChange={(e) => setHistSeason(e.target.value)}>
+                <option value="">全季節</option>
+                {SEASONS_MAP.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+              </select>
+              <select value={histHour} onChange={(e) => setHistHour(e.target.value)}>
+                <option value="">全時間帯</option>
+                {HEATMAP_HOURS.map((h) => (
+                  <option key={h} value={h}>{h.toString().padStart(2, "0")}時台</option>
+                ))}
+              </select>
+              <span style={{ fontSize: "0.85rem", color: "#57606a" }}>
+                {histData.reduce((s, b) => s + b.count, 0)} サーマル
+              </span>
             </div>
-            {compareIds.length === 0 ? (
-              <div className="empty">ブロックを選択してください</div>
+            {histData.every((b) => b.count === 0) ? (
+              <div className="empty">該当するサーマルデータがありません</div>
             ) : (
-              (() => {
-                const selBlocks = compareIds
-                  .map((id) => data.blocks.find((b) => b.id === id))
-                  .filter((b): b is AreaBlock => !!b);
-                const chartData = Array.from({ length: 24 }, (_, h) => {
-                  const row: Record<string, number | string | null> = { hour: `${h.toString().padStart(2, "0")}` };
-                  for (const b of selBlocks) {
-                    const cell = b.by_hour.find((c) => c.hour === h);
-                    row[b.label] = cell ? Number(cell.avg_climb_rate_ms.toFixed(2)) : 0;
-                  }
-                  return row;
-                });
-                return (
-                  <>
-                    <div style={{ width: "100%", height: 320 }}>
-                      <ResponsiveContainer>
-                        <BarChart data={chartData} margin={{ top: 10, right: 16, bottom: 24, left: 8 }}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="hour" label={{ value: "現地時刻 (時)", position: "insideBottom", offset: -8 }} />
-                          <YAxis label={{ value: "平均上昇率 (m/s)", angle: -90, position: "insideLeft" }} />
-                          <RTooltip />
-                          <Legend />
-                          {selBlocks.map((b, i) => (
-                            <Bar key={b.id} dataKey={b.label} fill={COMPARE_COLORS[i % COMPARE_COLORS.length]} />
-                          ))}
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                    <table style={{ marginTop: "0.75rem", fontSize: "0.82rem" }}>
-                      <thead>
-                        <tr>
-                          <th>ブロック</th>
-                          {Array.from({ length: 24 }, (_, h) => (
-                            <th key={h} style={{ padding: "0.15rem 0.3rem" }}>{h.toString().padStart(2, "0")}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selBlocks.map((b, i) => {
-                          const hourMap = new Map(b.by_hour.map((c) => [c.hour, c]));
-                          return (
-                            <tr key={b.id}>
-                              <td style={{ whiteSpace: "nowrap", color: COMPARE_COLORS[i % COMPARE_COLORS.length], fontWeight: 600 }}>
-                                {b.label}
-                              </td>
-                              {Array.from({ length: 24 }, (_, h) => {
-                                const c = hourMap.get(h);
-                                return (
-                                  <td key={h} style={{ padding: "0.15rem 0.3rem", textAlign: "right" }}
-                                      title={c ? `n=${c.thermal_count}` : ""}>
-                                    {c ? c.avg_climb_rate_ms.toFixed(1) : "—"}
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </>
-                );
-              })()
+              <RateHistogramChart bins={histData} color="#1a7f37" />
             )}
           </div>
-
-          {selected && (
-            <div className="card">
-              <h2>選択: {selected.label}</h2>
-              <div className="metric-grid">
-                <div className="metric">
-                  <div className="metric-label">サーマル数</div>
-                  <div className="metric-value">{selected.thermal_count}</div>
-                </div>
-                <div className="metric">
-                  <div className="metric-label">平均上昇率</div>
-                  <div className="metric-value">{fmtNum(selected.avg_climb_rate_ms, 2, "m/s")}</div>
-                </div>
-                <div className="metric">
-                  <div className="metric-label">最大上昇率</div>
-                  <div className="metric-value">{fmtNum(selected.max_climb_rate_ms, 2, "m/s")}</div>
-                </div>
-                <div className="metric">
-                  <div className="metric-label">平均獲得高度</div>
-                  <div className="metric-value">{fmtNum(selected.avg_altitude_gain_m, 0, "m")}</div>
-                </div>
-              </div>
-
-              {selected.by_hour.length > 0 ? (
-                <table style={{ marginTop: "1rem" }}>
-                  <thead>
-                    <tr>
-                      <th>時刻</th>
-                      <th>サーマル数</th>
-                      <th>平均上昇率</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selected.by_hour.map((h) => (
-                      <tr key={h.hour}>
-                        <td>{h.hour.toString().padStart(2, "0")}:00台</td>
-                        <td>{h.thermal_count}</td>
-                        <td>{h.avg_climb_rate_ms.toFixed(2)} m/s</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <div className="empty">時間帯データなし</div>
-              )}
-            </div>
-          )}
-
-          {selected && (
-            <div className="card">
-              <h2>
-                上昇率・下降率ヒストグラム — {selected.label}
-              </h2>
-              <p style={{ fontSize: "0.82rem", color: "#57606a", margin: "0 0 0.5rem" }}>
-                GPSフィックス単位の上昇率/下降率分布。ブロック内に入った全フィックスを集計。
-              </p>
-              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
-                <button
-                  onClick={() => setStatsView("overall")}
-                  style={{ background: statsView === "overall" ? "#0969da" : "#f6f8fa", color: statsView === "overall" ? "#fff" : "#1f2328" }}
-                >
-                  全データ
-                </button>
-                <button
-                  onClick={() => setStatsView("season")}
-                  style={{ background: statsView === "season" ? "#0969da" : "#f6f8fa", color: statsView === "season" ? "#fff" : "#1f2328" }}
-                >
-                  季節別 ({blockStats?.by_season.length ?? 0})
-                </button>
-                <button
-                  onClick={() => setStatsView("day")}
-                  style={{ background: statsView === "day" ? "#0969da" : "#f6f8fa", color: statsView === "day" ? "#fff" : "#1f2328" }}
-                >
-                  日別 ({blockStats?.by_day.length ?? 0})
-                </button>
-              </div>
-
-              {loadingStats && <div className="empty">統計を計算中...</div>}
-              {statsError && <div className="empty" style={{ color: "#cf222e" }}>エラー: {statsError}</div>}
-              {blockStats && !loadingStats && (
-                <BlockHistogramView stats={blockStats} view={statsView} />
-              )}
-            </div>
-          )}
         </>
       )}
     </div>
   );
 }
 
-function HistogramPair({ group }: { group: HistogramGroup }) {
+function HistogramPair({ group }: { group: import("../types").HistogramGroup }) {
   return (
     <div style={{ border: "1px solid #d0d7de", borderRadius: "6px", padding: "0.5rem", background: "#fff", marginBottom: "0.75rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.4rem" }}>
@@ -574,27 +631,5 @@ function HistogramPair({ group }: { group: HistogramGroup }) {
   );
 }
 
-function BlockHistogramView({ stats, view }: { stats: BlockStats; view: StatsView }) {
-  if (view === "overall") {
-    return <HistogramPair group={stats.overall} />;
-  }
-  if (view === "season") {
-    if (stats.by_season.length === 0) return <div className="empty">季節データなし</div>;
-    return (
-      <>
-        {stats.by_season.map((g) => (
-          <HistogramPair key={g.key} group={g} />
-        ))}
-      </>
-    );
-  }
-  // day view
-  if (stats.by_day.length === 0) return <div className="empty">日別データなし</div>;
-  return (
-    <div style={{ maxHeight: "70vh", overflowY: "auto" }}>
-      {stats.by_day.map((g) => (
-        <HistogramPair key={g.key} group={g} />
-      ))}
-    </div>
-  );
-}
+// Keep HistogramPair and BlockHistogramView for potential future use
+export { HistogramPair };

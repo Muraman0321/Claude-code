@@ -194,6 +194,7 @@ export function weatherStats(flights: FlightSummary[]): WeatherBucket[] {
       avg_climb_rate_ms: mean(pickNumber(inBucket, (f) => f.avg_climb_in_thermals_ms)),
       avg_ground_speed_kmh: mean(pickNumber(inBucket, (f) => f.avg_ground_speed_kmh)),
       avg_best_glide: mean(pickNumber(inBucket, (f) => f.best_glide_ratio)),
+      avg_altitude_gain_m: mean(pickNumber(inBucket, (f) => f.altitude_gain_m)),
     });
   }
   return out;

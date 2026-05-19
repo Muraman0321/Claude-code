@@ -159,11 +159,12 @@ export function detectThermals(
   minDurationS = 20.0,
   minAvgClimbMs = 0.3,
 ): Thermal[] {
-  const thermals: Thermal[] = [];
-  if (fixes.length === 0 || metrics.length === 0) return thermals;
+  if (fixes.length === 0 || metrics.length === 0) return [];
 
   const towEnd = towReleaseIndex(fixes, metrics);
 
+  // Collect raw climb segments
+  const raw: Thermal[] = [];
   let start: number | null = null;
   for (let i = 0; i < metrics.length; i++) {
     const m = metrics[i];
@@ -186,7 +187,7 @@ export function detectThermals(
             const avgClimb = climbSum / segLen;
             const gain = fixes[i - 1].gpsAltitude - fixes[start].gpsAltitude;
             if (avgClimb >= minAvgClimbMs && gain > 5) {
-              thermals.push({
+              raw.push({
                 start_index: start,
                 end_index: i - 1,
                 start_time: fixes[start].timestampIso,
@@ -208,7 +209,45 @@ export function detectThermals(
       start = null;
     }
   }
-  return thermals;
+
+  // Merge consecutive thermals whose gap is ≤ 30 s into a single thermal
+  const GAP_THRESHOLD_S = 30;
+  const merged: Thermal[] = [];
+  for (const t of raw) {
+    const prev = merged[merged.length - 1];
+    if (prev) {
+      const gapS = (fixes[t.start_index].timestampMs - fixes[prev.end_index].timestampMs) / 1000;
+      if (gapS <= GAP_THRESHOLD_S) {
+        const s = prev.start_index;
+        const e = t.end_index;
+        const segLen = e - s + 1;
+        let climbSum = 0, latSum = 0, lonSum = 0;
+        for (let j = s; j <= e; j++) {
+          climbSum += metrics[j].climb_rate_ms;
+          latSum += fixes[j].latitude;
+          lonSum += fixes[j].longitude;
+        }
+        merged[merged.length - 1] = {
+          start_index: s,
+          end_index: e,
+          start_time: prev.start_time,
+          end_time: t.end_time,
+          duration_s: (fixes[e].timestampMs - fixes[s].timestampMs) / 1000,
+          altitude_gain_m: fixes[e].gpsAltitude - fixes[s].gpsAltitude,
+          avg_climb_rate_ms: round(climbSum / segLen, 2),
+          center_lat: latSum / segLen,
+          center_lon: lonSum / segLen,
+          start_lat: prev.start_lat,
+          start_lon: prev.start_lon,
+          end_lat: t.end_lat,
+          end_lon: t.end_lon,
+        };
+        continue;
+      }
+    }
+    merged.push(t);
+  }
+  return merged;
 }
 
 function bestGlideRatio(fixes: IgcFix[], metrics: FixMetrics[]): number {

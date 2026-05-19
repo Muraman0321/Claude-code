@@ -5,6 +5,7 @@ import Compare from "./pages/Compare";
 import Dashboard from "./pages/Dashboard";
 import FlightDetail from "./pages/FlightDetail";
 import FlightPhase from "./pages/FlightPhase";
+import FlightReview from "./pages/FlightReview";
 import PilotAnalysis from "./pages/PilotAnalysis";
 import Statistics from "./pages/Statistics";
 import Weather from "./pages/Weather";
@@ -26,8 +27,9 @@ function AppShell() {
         <NavLink to="/compare">比較</NavLink>
         <NavLink to="/statistics">統計</NavLink>
         <NavLink to="/pilot-analysis">パイロット分析</NavLink>
-        <NavLink to="/area">エリア分析</NavLink>
+        <NavLink to="/area">サーマルエリア分析</NavLink>
         <NavLink to="/weather">気象分析</NavLink>
+        <NavLink to="/flight-review">フライト振り返り</NavLink>
       </nav>
       <main>
         <Routes>
@@ -39,6 +41,7 @@ function AppShell() {
           <Route path="/pilot-analysis" element={<PilotAnalysis />} />
           <Route path="/area" element={<Area />} />
           <Route path="/weather" element={<Weather />} />
+          <Route path="/flight-review" element={<FlightReview />} />
         </Routes>
       </main>
     </div>

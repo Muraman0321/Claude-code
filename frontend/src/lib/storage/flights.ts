@@ -76,6 +76,9 @@ function rowToSummary(r: FlightRow): FlightSummary {
     weather_pressure_hpa: (w.pressure_hpa as number | null) ?? null,
     weather_cloud_cover_pct: (w.cloud_cover_pct as number | null) ?? null,
     weather_humidity_pct: (w.humidity_pct as number | null) ?? null,
+    weather_wind_speed_850hpa_kmh: (w.wind_speed_850hpa_kmh as number | null) ?? null,
+    weather_wind_speed_700hpa_kmh: (w.wind_speed_700hpa_kmh as number | null) ?? null,
+    weather_wind_speed_500hpa_kmh: (w.wind_speed_500hpa_kmh as number | null) ?? null,
     weather_source: (w.source as string | null) ?? null,
   };
 }

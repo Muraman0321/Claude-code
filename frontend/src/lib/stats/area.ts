@@ -58,6 +58,7 @@ function blockStatsFromThermals(records: ThermalLight[], byHour: Map<number, num
   if (records.length === 0) {
     return {
       thermal_count: 0,
+      total_thermal_time_s: 0,
       avg_climb_rate_ms: null,
       max_climb_rate_ms: null,
       avg_altitude_gain_m: null,
@@ -68,6 +69,7 @@ function blockStatsFromThermals(records: ThermalLight[], byHour: Map<number, num
   const gains = records.map((r) => r.altitude_gain_m);
   return {
     thermal_count: records.length,
+    total_thermal_time_s: records.reduce((s, r) => s + r.duration_s, 0),
     avg_climb_rate_ms: round(climbs.reduce((a, b) => a + b, 0) / climbs.length, 2),
     max_climb_rate_ms: round(Math.max(...climbs), 2),
     avg_altitude_gain_m: round(gains.reduce((a, b) => a + b, 0) / gains.length, 1),

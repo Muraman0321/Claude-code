@@ -28,6 +28,9 @@ export interface FlightSummary {
   weather_pressure_hpa: number | null;
   weather_cloud_cover_pct: number | null;
   weather_humidity_pct: number | null;
+  weather_wind_speed_850hpa_kmh: number | null;
+  weather_wind_speed_700hpa_kmh: number | null;
+  weather_wind_speed_500hpa_kmh: number | null;
   weather_source: string | null;
 }
 
@@ -97,6 +100,7 @@ export interface WeatherBucket {
   avg_climb_rate_ms: number | null;
   avg_ground_speed_kmh: number | null;
   avg_best_glide: number | null;
+  avg_altitude_gain_m: number | null;
 }
 
 export interface HourCell {
@@ -112,6 +116,7 @@ export interface AreaBlock {
   bearing_to: number | null;
   geometry: [number, number][]; // closed ring of [lat, lon]
   thermal_count: number;
+  total_thermal_time_s: number;
   avg_climb_rate_ms: number | null;
   max_climb_rate_ms: number | null;
   avg_altitude_gain_m: number | null;

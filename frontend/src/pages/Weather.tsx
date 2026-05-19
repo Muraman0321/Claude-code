@@ -22,7 +22,10 @@ type WeatherKey =
   | "weather_cloud_cover_pct"
   | "weather_humidity_pct"
   | "weather_pressure_hpa"
-  | "weather_wind_dir_deg";
+  | "weather_wind_dir_deg"
+  | "weather_wind_speed_850hpa_kmh"
+  | "weather_wind_speed_700hpa_kmh"
+  | "weather_wind_speed_500hpa_kmh";
 
 type MetricKey =
   | "avg_climb_in_thermals_ms"
@@ -44,6 +47,9 @@ interface AxisDef {
 const WEATHER_VARS: (AxisDef & { key: WeatherKey })[] = [
   { key: "weather_temp_c", label: "気温", unit: "°C", bins: [-5, 0, 5, 10, 15, 20, 25, 30, 35, 40] },
   { key: "weather_wind_speed_kmh", label: "地上風速", unit: "km/h", bins: [0, 3, 6, 10, 15, 20, 25, 30, 40] },
+  { key: "weather_wind_speed_850hpa_kmh", label: "高度別風速 850hPa (約1500m)", unit: "km/h", bins: [0, 5, 10, 15, 20, 30, 40, 60] },
+  { key: "weather_wind_speed_700hpa_kmh", label: "高度別風速 700hPa (約3000m)", unit: "km/h", bins: [0, 5, 10, 20, 30, 40, 60, 80] },
+  { key: "weather_wind_speed_500hpa_kmh", label: "高度別風速 500hPa (約5500m)", unit: "km/h", bins: [0, 10, 20, 30, 40, 60, 80, 100] },
   { key: "weather_cloud_cover_pct", label: "雲量", unit: "%", bins: [0, 10, 25, 40, 55, 70, 85, 100] },
   { key: "weather_humidity_pct", label: "湿度", unit: "%", bins: [20, 35, 50, 60, 70, 80, 90, 100] },
   { key: "weather_pressure_hpa", label: "気圧", unit: "hPa", bins: [990, 1000, 1005, 1010, 1015, 1020, 1025, 1035] },
@@ -152,7 +158,7 @@ function bucketLabel(edges: number[], i: number, unit: string): string {
 
 export default function Weather() {
   const [flights, setFlights] = useState<FlightSummary[]>([]);
-  const [xKey, setXKey] = useState<WeatherKey>("weather_cloud_cover_pct");
+  const [xKey, setXKey] = useState<WeatherKey>("weather_temp_c");
   const [yKey, setYKey] = useState<MetricKey>("avg_climb_in_thermals_ms");
   const [pilot, setPilot] = useState("");
   const [aircraft, setAircraft] = useState("");
