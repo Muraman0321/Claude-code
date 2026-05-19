@@ -177,6 +177,7 @@ export interface ThermalLight {
   duration_s: number;
   start_time: string;
   local_hour: number;
+  local_minute: number;
   start_lat: number | null;
   start_lon: number | null;
   end_lat: number | null;

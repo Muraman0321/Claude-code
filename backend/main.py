@@ -609,6 +609,7 @@ def flight_thermals(
             duration_s=t.duration_s,
             start_time=t.start_time,
             local_hour=local_hour,
+            local_minute=t.start_time.minute,
             start_lat=t.start_lat,
             start_lon=t.start_lon,
             end_lat=t.end_lat,

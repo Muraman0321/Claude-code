@@ -107,9 +107,9 @@ function roundedRectPolygon(
   return pts;
 }
 
-function hourDist(a: number, b: number): number {
-  const d = Math.abs(a - b) % 24;
-  return d > 12 ? 24 - d : d;
+function minuteDist(a: number, b: number): number {
+  const d = Math.abs(a - b) % 1440;
+  return d > 720 ? 1440 - d : d;
 }
 
 export default function Compare() {
@@ -125,7 +125,8 @@ export default function Compare() {
   const [thermals, setThermals] = useState<ThermalLight[]>([]);
   const [showThermals, setShowThermals] = useState(true);
   const [thermalMode, setThermalMode] = useState<"circle" | "rounded">("circle");
-  const [filterHour, setFilterHour] = useState<number | null>(null);
+  const [filterMinute, setFilterMinute] = useState<number | null>(null);
+  const [trackOpacity, setTrackOpacity] = useState(0.7);
 
   useEffect(() => {
     api.listFlights().then(setFlights).catch(console.error);
@@ -223,9 +224,9 @@ export default function Compare() {
 
   const visibleThermals = useMemo(() => {
     if (!showThermals) return [];
-    if (filterHour == null) return thermals;
-    return thermals.filter((t) => hourDist(t.local_hour, filterHour) <= 1);
-  }, [thermals, showThermals, filterHour]);
+    if (filterMinute == null) return thermals;
+    return thermals.filter((t) => minuteDist(t.local_hour * 60 + t.local_minute, filterMinute) <= 20);
+  }, [thermals, showThermals, filterMinute]);
 
   const mapCenter = useMemo<[number, number]>(() => {
     const pts = tracks.flatMap((t) => t.points);
@@ -338,6 +339,19 @@ export default function Compare() {
             </h2>
             {showMap && (
               <div style={{ marginBottom: "0.75rem", display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "center", fontSize: "0.88rem" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  経路透明度:
+                  <input
+                    type="range"
+                    min={0.05}
+                    max={1}
+                    step={0.05}
+                    value={trackOpacity}
+                    onChange={(e) => setTrackOpacity(Number(e.target.value))}
+                    style={{ width: "80px" }}
+                  />
+                  <span style={{ minWidth: "32px" }}>{Math.round(trackOpacity * 100)}%</span>
+                </span>
                 <label>
                   <input
                     type="checkbox"
@@ -364,24 +378,25 @@ export default function Compare() {
                       <label>
                         <input
                           type="checkbox"
-                          checked={filterHour == null}
-                          onChange={(e) => setFilterHour(e.target.checked ? null : 12)}
+                          checked={filterMinute == null}
+                          onChange={(e) => setFilterMinute(e.target.checked ? null : 12 * 60)}
                           style={{ marginRight: "0.3rem" }}
                         />
                         全時間
                       </label>
-                      {filterHour != null && (
+                      {filterMinute != null && (
                         <>
                           <input
                             type="range"
                             min={0}
-                            max={23}
-                            value={filterHour}
-                            onChange={(e) => setFilterHour(Number(e.target.value))}
-                            style={{ width: "120px" }}
+                            max={1430}
+                            step={10}
+                            value={filterMinute}
+                            onChange={(e) => setFilterMinute(Number(e.target.value))}
+                            style={{ width: "160px" }}
                           />
-                          <span style={{ minWidth: "80px" }}>
-                            {filterHour.toString().padStart(2, "0")}:00台 ±1h
+                          <span style={{ minWidth: "100px" }}>
+                            {`${Math.floor(filterMinute / 60).toString().padStart(2, "0")}:${(filterMinute % 60).toString().padStart(2, "0")} ±20分`}
                           </span>
                         </>
                       )}
@@ -409,7 +424,7 @@ export default function Compare() {
                       <Polyline
                         key={t.flight_id}
                         positions={t.points.map((p): [number, number] => [p.lat, p.lon])}
-                        pathOptions={{ color: COLORS[i % COLORS.length], weight: 2, opacity: 0.7 }}
+                        pathOptions={{ color: COLORS[i % COLORS.length], weight: 2, opacity: trackOpacity }}
                       >
                         <Tooltip sticky>
                           {t.pilot} / {t.aircraft}
@@ -433,7 +448,7 @@ export default function Compare() {
                           <br />
                           高度獲得 {t.altitude_gain_m.toFixed(0)} m
                           <br />
-                          現地 {t.local_hour.toString().padStart(2, "0")}:00台
+                          現地 {t.local_hour.toString().padStart(2, "0")}:{t.local_minute.toString().padStart(2, "0")}頃
                         </Tooltip>
                       );
 

@@ -203,6 +203,7 @@ class ThermalLight(BaseModel):
     duration_s: float
     start_time: datetime
     local_hour: int  # 0-23 estimated from start longitude
+    local_minute: int = 0  # 0-59
     start_lat: float | None = None
     start_lon: float | None = None
     end_lat: float | None = None
