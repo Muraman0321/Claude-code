@@ -49,6 +49,8 @@ def _add_missing_columns() -> None:
         "weather_pressure_hpa": "REAL",
         "weather_cloud_cover_pct": "REAL",
         "weather_humidity_pct": "REAL",
+        "weather_dewpoint_c": "REAL",
+        "weather_cloud_base_m": "REAL",
         "weather_source": "VARCHAR",
     }
     with engine.begin() as conn:

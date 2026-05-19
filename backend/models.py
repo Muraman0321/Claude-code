@@ -45,13 +45,15 @@ class Flight(Base):
     start_latitude = Column(Float, nullable=True)
     start_longitude = Column(Float, nullable=True)
 
-    # Weather snapshot at takeoff (nearest hourly cell from Open-Meteo).
+    # Weather averaged across flight window (Open-Meteo hourly reanalysis).
     weather_temp_c = Column(Float, nullable=True)
     weather_wind_speed_kmh = Column(Float, nullable=True)
     weather_wind_dir_deg = Column(Float, nullable=True)
     weather_pressure_hpa = Column(Float, nullable=True)
     weather_cloud_cover_pct = Column(Float, nullable=True)
     weather_humidity_pct = Column(Float, nullable=True)
+    weather_dewpoint_c = Column(Float, nullable=True)
+    weather_cloud_base_m = Column(Float, nullable=True)
     weather_source = Column(String, nullable=True)
 
     raw_igc = Column(Text, nullable=True)  # full file kept for re-analysis
