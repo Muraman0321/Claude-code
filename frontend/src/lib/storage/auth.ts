@@ -26,9 +26,13 @@ export async function ensureSession(): Promise<Session | null> {
 
 /** Send a magic-link email so the same anonymous device can be paired with a permanent identity. */
 export async function sendMagicLink(email: string): Promise<{ ok: boolean; message: string }> {
+  // Use VITE_APP_URL for production (e.g., Render.com), fall back to window.location for local dev
+  const baseUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+  const redirectUrl = baseUrl + window.location.pathname;
+
   const { error } = await supabase.auth.signInWithOtp({
     email,
-    options: { emailRedirectTo: window.location.origin + window.location.pathname },
+    options: { emailRedirectTo: redirectUrl },
   });
   if (error) return { ok: false, message: error.message };
   return { ok: true, message: "メールを送りました。リンクを開いて続行してください。" };
