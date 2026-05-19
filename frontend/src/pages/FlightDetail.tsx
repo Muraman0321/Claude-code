@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { api } from "../api/client";
 import { AltitudeChart, ClimbHistogram, ClimbRateChart, SpeedChart } from "../components/Charts";
 import { FlightMap } from "../components/FlightMap";
@@ -100,6 +100,11 @@ export default function FlightDetailPage() {
         {flight.pilot} — {flight.aircraft} ({fmtDate(flight.flight_date)})
       </h1>
       {flight.remarks && <p>備考: <code>{flight.remarks}</code></p>}
+      <p style={{ marginBottom: "1rem" }}>
+        <Link to={`/flights/${flight.id}/phase`} style={{ color: "#0969da", textDecoration: "none" }}>
+          ウインチ曳航分析 →
+        </Link>
+      </p>
 
       <div className="card">
         <h2>サマリー</h2>
