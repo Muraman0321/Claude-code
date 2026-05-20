@@ -321,9 +321,11 @@ export async function updateWeather(
 
 /** Remove duplicate flight records (same pilot + started_at), keeping the highest id. Returns count deleted. */
 export async function cleanDuplicateFlights(): Promise<number> {
+  const owner = await currentOwner();
   const { data, error } = await supabase
     .from("flights")
     .select("id, pilot, started_at, flight_date")
+    .eq("owner", owner)
     .order("id", { ascending: true });
   if (error) throw new Error(error.message);
 

@@ -372,6 +372,56 @@ def flight_phase_analysis(flight_id: int, db: Session = Depends(get_db)):
     return result
 
 
+@core.post("/api/flights/{flight_id}/reanalyze")
+def reanalyze_flight(flight_id: int, db: Session = Depends(get_db)):
+    """Re-detect thermals and re-compute summary from stored raw IGC.
+
+    Useful when thermals were accidentally deleted or when the analysis
+    algorithm has been updated and existing flights need to be refreshed.
+    """
+    flight = db.query(Flight).filter(Flight.id == flight_id).one_or_none()
+    if not flight:
+        raise HTTPException(status_code=404, detail="flight not found")
+    if not flight.raw_igc:
+        raise HTTPException(status_code=400, detail="raw IGC not available for this flight")
+
+    igc = igc_parser.parse_igc_bytes(flight.raw_igc.encode("latin-1"))
+    metrics = analysis.compute_fix_metrics(igc.fixes)
+    thermals = analysis.detect_thermals(igc.fixes, metrics)
+    summary = analysis.compute_summary(igc.fixes, metrics, thermals)
+
+    # Delete old thermals and replace with freshly detected ones.
+    for old in list(flight.thermals):
+        db.delete(old)
+    db.flush()
+
+    for t in thermals:
+        flight.thermals.append(
+            ThermalRecord(
+                start_time=igc.fixes[t.start_index].timestamp.replace(tzinfo=None),
+                end_time=igc.fixes[t.end_index].timestamp.replace(tzinfo=None),
+                duration_s=t.duration_s,
+                altitude_gain_m=t.altitude_gain_m,
+                avg_climb_rate_ms=t.avg_climb_rate_ms,
+                center_lat=t.center_lat,
+                center_lon=t.center_lon,
+                start_lat=t.start_lat,
+                start_lon=t.start_lon,
+                end_lat=t.end_lat,
+                end_lon=t.end_lon,
+            )
+        )
+
+    # Update flight summary stats.
+    flight.thermal_count = summary.thermal_count
+    flight.thermal_time_s = summary.thermal_time_s
+    flight.avg_climb_in_thermals_ms = summary.avg_climb_rate_in_thermals_ms
+    flight.cruise_time_s = summary.cruise_time_s
+    db.commit()
+
+    return {"flight_id": flight_id, "thermal_count": len(thermals)}
+
+
 @core.get("/api/pilots", response_model=list[str])
 def list_pilots(db: Session = Depends(get_db)):
     rows = db.query(Flight.pilot).distinct().order_by(Flight.pilot).all()

@@ -36,6 +36,7 @@ export default function Dashboard() {
   }, [filterPilot, filterAircraft, filterFrom, filterTo]);
 
   const [cleanBusy, setCleanBusy] = useState(false);
+  const [reanalyzeBusy, setReanalyzeBusy] = useState<number | null>(null);
 
   async function handleDelete(id: number) {
     if (!confirm("このフライトを削除しますか？")) return;
@@ -54,6 +55,19 @@ export default function Dashboard() {
       alert(`エラー: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setCleanBusy(false);
+    }
+  }
+
+  async function handleReanalyze(id: number) {
+    setReanalyzeBusy(id);
+    try {
+      const result = await api.reanalyzeThermals(id);
+      alert(`サーマル再解析完了: ${result.thermal_count} 件検出`);
+      refresh();
+    } catch (e) {
+      alert(`エラー: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setReanalyzeBusy(null);
     }
   }
 
@@ -126,8 +140,16 @@ export default function Dashboard() {
                   <td>{fmtNum(f.avg_climb_in_thermals_ms, 2, "m/s")}</td>
                   <td>{fmtNum(f.max_ground_speed_kmh, 0, "km/h")}</td>
                   <td>{f.thermal_count ?? 0}</td>
-                  <td>
+                  <td style={{ whiteSpace: "nowrap" }}>
                     <Link to={`/flights/${f.id}`}>詳細</Link>
+                    {" / "}
+                    <a
+                      href="#"
+                      onClick={(e) => { e.preventDefault(); handleReanalyze(f.id); }}
+                      style={{ color: reanalyzeBusy === f.id ? "#888" : "#1f6feb", pointerEvents: reanalyzeBusy === f.id ? "none" : "auto" }}
+                    >
+                      {reanalyzeBusy === f.id ? "解析中..." : "再解析"}
+                    </a>
                     {" / "}
                     <a href="#" onClick={(e) => { e.preventDefault(); handleDelete(f.id); }} style={{ color: "#cf222e" }}>
                       削除
