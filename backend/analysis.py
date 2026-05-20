@@ -223,26 +223,46 @@ def compute_fix_metrics(fixes: list[Fix]) -> list[FixMetrics]:
     ]
 
 
-def _tow_release_index(fixes: list[Fix], metrics: list[FixMetrics], min_gain_m: float = 50.0) -> int:
-    """Return the first index after the initial tow climb ends.
+def _tow_release_index(
+    fixes: list[Fix],
+    metrics: list[FixMetrics],
+    min_gain_m: float = 50.0,
+    release_threshold_ms: float = 1.0,
+    window_s: float = 10.0,
+) -> int:
+    """Return the index where tow release occurs.
 
-    Looks for the first moment where the aircraft has gained at least
-    min_gain_m from its takeoff altitude AND starts descending — this
-    typically coincides with winch or aerotow release.
+    Primary: first fix (after gaining min_gain_m) where the 10-second rolling
+    average climb rate drops to <= release_threshold_ms.  This matches the
+    definition 「平均上昇率が10秒以上1.0m/s以下」.
 
-    Falls back to the end of the very first climb segment if no clear
-    descent is found after the altitude gain.
+    Fallback: original logic — first descent after reaching min_gain_m, then
+    end of the first climb segment.
     """
     if not fixes or not metrics:
         return 0
 
-    # Takeoff = first fix where ground speed exceeds 15 km/h.
     move_start = next(
         (i for i, m in enumerate(metrics) if m.ground_speed_kmh > 15), 0
     )
     takeoff_alt = _altitude_for_display(fixes[move_start])
-    peak_alt = takeoff_alt
 
+    # Primary: 10-second rolling average <= release_threshold_ms
+    for i in range(move_start, len(fixes)):
+        if _altitude_for_display(fixes[i]) - takeoff_alt < min_gain_m:
+            continue
+        target_time = fixes[i].timestamp + timedelta(seconds=window_s)
+        end_j = i
+        while end_j < len(fixes) - 1 and fixes[end_j].timestamp < target_time:
+            end_j += 1
+        window = metrics[i : end_j + 1]
+        if len(window) >= 3:
+            avg = sum(m.climb_rate_ms for m in window) / len(window)
+            if avg <= release_threshold_ms:
+                return i
+
+    # Fallback: first descent after gaining enough altitude.
+    peak_alt = takeoff_alt
     for i in range(move_start, len(metrics)):
         alt = _altitude_for_display(fixes[i])
         if alt > peak_alt:
@@ -250,7 +270,7 @@ def _tow_release_index(fixes: list[Fix], metrics: list[FixMetrics], min_gain_m: 
         if peak_alt - takeoff_alt >= min_gain_m and metrics[i].climb_rate_ms < 0:
             return i
 
-    # No clear release found: skip to end of the first climb segment.
+    # Last fallback: end of the first climb segment.
     in_climb = False
     for i in range(move_start, len(metrics)):
         if metrics[i].climb_rate_ms > 0.1:
@@ -409,10 +429,12 @@ def compute_summary(fixes: list[Fix], metrics: list[FixMetrics], thermals: list[
 @dataclass
 class PhaseBoundaries:
     """Detected phase boundaries for winch launch analysis."""
-    tow_phase_end_fix_seq: int | None  # sequence at 80m altitude
-    mid_phase_end_fix_seq: int | None  # sequence where climb rate drops < 2.0 m/s
-    release_altitude_m: float | None  # altitude at tow release
-    release_fix_seq: int | None  # sequence of release fix
+    tow_phase_end_fix_seq: int | None        # sequence at 80m altitude (初期/中期 boundary)
+    mid_phase_end_fix_seq: int | None        # sequence at end of rapid ascent (中期/終期 boundary)
+    release_altitude_m: float | None         # altitude at tow release
+    release_fix_seq: int | None              # sequence of release fix
+    rapid_ascent_start_fix_seq: int | None = None  # sequence at start of rapid ascent
+    early_start_fix_seq: int | None = None   # sequence 10s before rapid ascent start (初期 start)
 
 
 def detect_winch_phases(
@@ -421,59 +443,83 @@ def detect_winch_phases(
 ) -> PhaseBoundaries:
     """Detect winch launch phase boundaries.
 
-    Returns indices for:
-    - Initial phase end: first fix at altitude >= 80m
-    - Mid phase end: first fix where climb rate < 2.0 m/s sustained for >= 3 seconds
-    - Release altitude and sequence: the tow cut point
+    Phase definitions:
+    - 曳航初期: (急激な上昇開始 - 10s) → 高度80m
+    - 曳航中期: 高度80m → 急激な上昇の終了
+    - 曳航終期: 急激な上昇の終了 → リリース (10秒平均上昇率 <= 1.0 m/s)
     """
     if not fixes or not metrics:
         return PhaseBoundaries(None, None, None, None)
 
-    # Find release point (tow cut)
-    release_idx = _tow_release_index(fixes, metrics)
-    release_alt = _altitude_for_display(fixes[release_idx])
-
-    # Find takeoff point (first movement)
+    # Takeoff: first fix where ground speed exceeds 15 km/h.
     move_start = next(
         (i for i, m in enumerate(metrics) if m.ground_speed_kmh > 15), 0
     )
     takeoff_alt = _altitude_for_display(fixes[move_start])
 
-    # Find initial phase end: first fix at >= 80m altitude
+    # Release point (tow cut).
+    release_idx = _tow_release_index(fixes, metrics)
+    release_alt = _altitude_for_display(fixes[release_idx])
+
+    # ── 急激な上昇開始 ──────────────────────────────────────────────────────────
+    # First fix where climb rate >= 2.0 m/s sustained for >= 5 seconds.
+    RAPID_THRESHOLD_MS = 2.0
+    RAPID_SUSTAIN_S = 5.0
+
+    rapid_start = move_start  # fallback
+    for i in range(move_start, release_idx):
+        target_time = fixes[i].timestamp + timedelta(seconds=RAPID_SUSTAIN_S)
+        end_j = i
+        while end_j < len(fixes) - 1 and fixes[end_j].timestamp < target_time:
+            end_j += 1
+        window = metrics[i : end_j + 1]
+        if window and all(m.climb_rate_ms >= RAPID_THRESHOLD_MS for m in window):
+            rapid_start = i
+            break
+
+    # ── 初期フェーズ開始 (急激な上昇開始 - 10s, but not before move_start) ───
+    early_time = fixes[rapid_start].timestamp - timedelta(seconds=10)
+    early_start = move_start
+    for i in range(move_start, rapid_start + 1):
+        if fixes[i].timestamp >= early_time:
+            early_start = i
+            break
+
+    # ── 高度80m (初期/中期 境界) ────────────────────────────────────────────
     initial_end_idx = None
     for i in range(move_start, release_idx + 1):
-        alt = _altitude_for_display(fixes[i])
-        if alt - takeoff_alt >= 80:
+        if _altitude_for_display(fixes[i]) - takeoff_alt >= 80:
             initial_end_idx = i
             break
 
-    # Find mid phase end: first sustained (>= 3s) segment where climb < 2.0 m/s
-    # Start search from initial phase end (or from release if initial didn't reach 80m)
-    search_start = initial_end_idx if initial_end_idx else move_start
+    # ── 急激な上昇の終了 (中期/終期 境界) ─────────────────────────────────────
+    # First 10-second window (after 80m) where average climb < 2.0 m/s.
+    MID_END_THRESHOLD_MS = 2.0
+    MID_END_WINDOW_S = 10.0
+
+    search_start = initial_end_idx if initial_end_idx is not None else move_start
     mid_end_idx = None
 
     if search_start < release_idx:
-        # Look for a 3-second window where climb rate stays below 2.0 m/s
         for i in range(search_start, release_idx):
-            # Find the timestamp 3 seconds forward
-            target_time = fixes[i].timestamp + timedelta(seconds=3)
-
-            # Find the first index at or after this target time
-            end_window = i
-            while end_window < release_idx and fixes[end_window].timestamp < target_time:
-                end_window += 1
-
-            # Check if all fixes in this window have climb < 2.0 m/s
-            window_metrics = metrics[i:end_window + 1]
-            if window_metrics and all(m.climb_rate_ms < 2.0 for m in window_metrics):
-                mid_end_idx = i
-                break
+            target_time = fixes[i].timestamp + timedelta(seconds=MID_END_WINDOW_S)
+            end_j = i
+            while end_j < release_idx and fixes[end_j].timestamp < target_time:
+                end_j += 1
+            window = metrics[i : end_j + 1]
+            if len(window) >= 3:
+                avg = sum(m.climb_rate_ms for m in window) / len(window)
+                if avg < MID_END_THRESHOLD_MS:
+                    mid_end_idx = i
+                    break
 
     return PhaseBoundaries(
         tow_phase_end_fix_seq=initial_end_idx,
         mid_phase_end_fix_seq=mid_end_idx,
         release_altitude_m=float(release_alt),
         release_fix_seq=release_idx,
+        rapid_ascent_start_fix_seq=rapid_start,
+        early_start_fix_seq=early_start,
     )
 
 
@@ -533,10 +579,11 @@ def compute_phase_metrics(
             max_speed_kmh=round(max_speed, 2),
         )
 
-    # Initial phase: from takeoff to 80m or release
+    # Initial phase: from (rapid ascent start - 10s) to 80m altitude.
     initial_end = boundaries.tow_phase_end_fix_seq if boundaries.tow_phase_end_fix_seq else release_idx
-    if move_start < initial_end:
-        result["initial"] = compute_segment_metrics(move_start, initial_end)
+    early_start = boundaries.early_start_fix_seq if boundaries.early_start_fix_seq is not None else move_start
+    if early_start < initial_end:
+        result["initial"] = compute_segment_metrics(early_start, initial_end)
 
     # Mid phase: from initial end to mid end or release
     if boundaries.tow_phase_end_fix_seq and boundaries.mid_phase_end_fix_seq:

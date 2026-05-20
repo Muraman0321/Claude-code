@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip as LeafletTooltip } from "react-leaflet";
 import {
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -11,7 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "../api/client";
-import type { Fix, FlightDetail, FlightSummary, Thermal } from "../types";
+import type { Fix, FlightDetail, FlightPhaseAnalysis, FlightSummary, Thermal } from "../types";
 import { fmtDate, fmtDuration, fmtNum } from "../utils/format";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -98,6 +97,8 @@ interface TowSectionProps {
 function TowSection({ selected, allFlights }: TowSectionProps) {
   const [peerDetails, setPeerDetails] = useState<FlightDetail[]>([]);
   const [loading, setLoading] = useState(false);
+  const [phaseAnalysis, setPhaseAnalysis] = useState<FlightPhaseAnalysis | null>(null);
+  const [phaseLoading, setPhaseLoading] = useState(false);
 
   const selectedBucket = windBucket(selected.weather_wind_speed_kmh);
 
@@ -119,6 +120,16 @@ function TowSection({ selected, allFlights }: TowSectionProps) {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [selected.id, selectedBucket, allFlights]);
+
+  useEffect(() => {
+    setPhaseAnalysis(null);
+    setPhaseLoading(true);
+    api
+      .getFlightPhaseAnalysis(selected.id)
+      .then((data) => setPhaseAnalysis(data))
+      .catch(console.error)
+      .finally(() => setPhaseLoading(false));
+  }, [selected.id]);
 
   // Build merged tow profile chart data
   const chartData = useMemo(() => {
@@ -239,11 +250,126 @@ function TowSection({ selected, allFlights }: TowSectionProps) {
           </table>
         </div>
       )}
+
+      {/* ── Phase analysis cards ── */}
+      <h3 style={{ marginTop: "2rem" }}>曳航フェーズ分析</h3>
+      {phaseLoading ? (
+        <div className="empty">読み込み中...</div>
+      ) : phaseAnalysis == null ? (
+        <div className="empty">フェーズデータがありません</div>
+      ) : (
+        <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+          {(
+            [
+              { key: "initial" as const, label: "曳航初期", sub: "急激な上昇開始10秒前〜高度80m" },
+              { key: "mid" as const, label: "曳航中期", sub: "高度80m〜急激な上昇の終了" },
+              { key: "late" as const, label: "曳航終期", sub: "急激な上昇の終了〜リリース" },
+            ] as const
+          ).map(({ key, label, sub }) => {
+            const m = phaseAnalysis[key];
+            return (
+              <div
+                key={key}
+                style={{
+                  flex: "1 1 200px",
+                  padding: "1rem",
+                  border: `2px solid ${TOW_PHASE_COLOR[key]}`,
+                  borderRadius: "8px",
+                  background: `${TOW_PHASE_COLOR[key]}18`,
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: "1rem", color: TOW_PHASE_COLOR[key] }}>
+                  {label}
+                </div>
+                <div style={{ fontSize: "0.78rem", color: "#57606a", marginBottom: "0.75rem" }}>
+                  {sub}
+                </div>
+                {m == null ? (
+                  <div style={{ color: "#57606a", fontSize: "0.85rem" }}>データなし</div>
+                ) : (
+                  <table style={{ width: "100%", fontSize: "0.85rem" }}>
+                    <tbody>
+                      <tr>
+                        <td style={{ color: "#57606a" }}>所要時間</td>
+                        <td style={{ textAlign: "right", fontWeight: 600 }}>
+                          {m.duration_s.toFixed(0)} 秒
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style={{ color: "#57606a" }}>平均上昇率</td>
+                        <td style={{ textAlign: "right", fontWeight: 600 }}>
+                          {m.avg_climb_rate_ms.toFixed(2)} m/s
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style={{ color: "#57606a" }}>獲得高度</td>
+                        <td style={{ textAlign: "right", fontWeight: 600 }}>
+                          {m.altitude_gained_m != null ? `${m.altitude_gained_m.toFixed(0)} m` : "—"}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style={{ color: "#57606a" }}>平均速度</td>
+                        <td style={{ textAlign: "right", fontWeight: 600 }}>
+                          {m.avg_speed_kmh.toFixed(1)} km/h
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
 // ── MapSection ────────────────────────────────────────────────────────────────
+
+function WindOverlay({ speedKmh, dirDeg }: { speedKmh: number | null; dirDeg: number | null }) {
+  if (speedKmh == null) return null;
+  const speedMs = speedKmh / 3.6;
+  // dirDeg is the direction the wind comes FROM (meteorological).
+  // Arrow points where the wind blows TO: rotate by dirDeg + 180.
+  const arrowRotation = dirDeg != null ? dirDeg + 180 : 0;
+  const dirLabel = dirDeg != null ? `${Math.round(dirDeg)}°` : "不明";
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: "10px",
+        right: "10px",
+        zIndex: 1000,
+        background: "rgba(255,255,255,0.92)",
+        border: "1px solid #d0d7de",
+        borderRadius: "8px",
+        padding: "8px 12px",
+        fontSize: "0.8rem",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        pointerEvents: "none",
+      }}
+    >
+      {dirDeg != null && (
+        <svg width="28" height="28" viewBox="0 0 28 28">
+          <g transform={`rotate(${arrowRotation}, 14, 14)`}>
+            {/* shaft */}
+            <line x1="14" y1="22" x2="14" y2="8" stroke="#1f6feb" strokeWidth="2.5" strokeLinecap="round" />
+            {/* arrowhead */}
+            <polygon points="14,4 10,12 18,12" fill="#1f6feb" />
+          </g>
+        </svg>
+      )}
+      <div>
+        <div style={{ fontWeight: 700, color: "#24292f" }}>{speedMs.toFixed(1)} m/s</div>
+        <div style={{ color: "#57606a" }}>風向 {dirLabel}</div>
+      </div>
+    </div>
+  );
+}
 
 function MapSection({ flight }: { flight: FlightDetail }) {
   const center: [number, number] = useMemo(() => {
@@ -256,7 +382,7 @@ function MapSection({ flight }: { flight: FlightDetail }) {
   const positions: [number, number][] = flight.fixes.map((f) => [f.latitude, f.longitude]);
 
   return (
-    <div style={{ height: "450px", borderRadius: "8px", overflow: "hidden" }}>
+    <div style={{ position: "relative", height: "500px", borderRadius: "8px", overflow: "hidden" }}>
       <MapContainer center={center} zoom={12} style={{ height: "100%", width: "100%" }}>
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -278,10 +404,11 @@ function MapSection({ flight }: { flight: FlightDetail }) {
               radius={6 + avgClimb * 3}
               color={color}
               fillColor={color}
-              fillOpacity={0.6}
-              weight={1}
+              fillOpacity={0.65}
+              weight={2}
             >
               <LeafletTooltip>
+                <strong>サーマル</strong><br />
                 上昇率: {th.avg_climb_rate_ms.toFixed(2)} m/s<br />
                 獲得高度: {th.altitude_gain_m.toFixed(0)} m<br />
                 時間: {th.duration_s.toFixed(0)} 秒
@@ -290,19 +417,15 @@ function MapSection({ flight }: { flight: FlightDetail }) {
           );
         })}
       </MapContainer>
+      <WindOverlay
+        speedKmh={flight.weather_wind_speed_kmh}
+        dirDeg={flight.weather_wind_dir_deg}
+      />
     </div>
   );
 }
 
 // ── main page ─────────────────────────────────────────────────────────────────
-
-type TabKey = "data" | "tow" | "map";
-
-const TAB_LABELS: Record<TabKey, string> = {
-  data: "データ",
-  tow: "曳航",
-  map: "フライト",
-};
 
 export default function FlightReview() {
   const [allFlights, setAllFlights] = useState<FlightSummary[]>([]);
@@ -313,7 +436,6 @@ export default function FlightReview() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [flightDetail, setFlightDetail] = useState<FlightDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [tab, setTab] = useState<TabKey>("data");
   const [listLoading, setListLoading] = useState(true);
 
   useEffect(() => {
@@ -353,9 +475,35 @@ export default function FlightReview() {
     <div>
       <h1>フライト振り返り</h1>
 
+      {/* ── Analysis section ── */}
+      <div className="card">
+        {selectedId == null ? (
+          <div className="empty">フライトを選択してください</div>
+        ) : detailLoading ? (
+          <div className="empty">読み込み中...</div>
+        ) : flightDetail == null ? (
+          <div className="empty">データが見つかりません</div>
+        ) : (
+          <>
+            <h2>
+              フライト分析 — {flightDetail.pilot} ({fmtDate(flightDetail.flight_date)})
+            </h2>
+
+            <h3 style={{ marginTop: "1.5rem", marginBottom: "0.75rem" }}>データ</h3>
+            <DataSection flight={flightDetail} />
+
+            <h3 style={{ marginTop: "2rem", marginBottom: "0.75rem" }}>曳航</h3>
+            <TowSection selected={flightDetail} allFlights={allFlights} />
+
+            <h3 style={{ marginTop: "2rem", marginBottom: "0.75rem" }}>フライト</h3>
+            <MapSection flight={flightDetail} />
+          </>
+        )}
+      </div>
+
       {/* ── Flight selector ── */}
       <div className="card">
-        <h2>フライトを選択</h2>
+        <h2>フライト一覧</h2>
 
         {/* filters */}
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -406,7 +554,7 @@ export default function FlightReview() {
                 </tr>
               </thead>
               <tbody>
-                {visibleFlights.map((f) => (
+                {visibleFlights.slice(0, 20).map((f) => (
                   <tr
                     key={f.id}
                     style={{
@@ -415,7 +563,6 @@ export default function FlightReview() {
                     }}
                     onClick={() => {
                       setSelectedId(f.id === selectedId ? null : f.id);
-                      setTab("data");
                     }}
                   >
                     <td>
@@ -437,53 +584,14 @@ export default function FlightReview() {
                 ))}
               </tbody>
             </table>
+            {visibleFlights.length > 20 && (
+              <p style={{ color: "#57606a", fontSize: "0.85rem", marginTop: "0.5rem" }}>
+                {visibleFlights.length} 件中 20 件を表示しています。絞り込みで件数を減らしてください。
+              </p>
+            )}
           </div>
         )}
       </div>
-
-      {/* ── Analysis section ── */}
-      {selectedId != null && (
-        <div className="card">
-          {detailLoading ? (
-            <div className="empty">読み込み中...</div>
-          ) : flightDetail == null ? (
-            <div className="empty">データが見つかりません</div>
-          ) : (
-            <>
-              <h2>
-                フライト分析 — {flightDetail.pilot} ({fmtDate(flightDetail.flight_date)})
-              </h2>
-
-              {/* tabs */}
-              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem" }}>
-                {(Object.keys(TAB_LABELS) as TabKey[]).map((k) => (
-                  <button
-                    key={k}
-                    onClick={() => setTab(k)}
-                    style={{
-                      padding: "0.4rem 1rem",
-                      borderRadius: "6px",
-                      border: "1px solid #d0d7de",
-                      background: tab === k ? "#1f6feb" : "#f6f8fa",
-                      color: tab === k ? "#fff" : "#24292f",
-                      cursor: "pointer",
-                      fontWeight: tab === k ? 700 : 400,
-                    }}
-                  >
-                    {TAB_LABELS[k]}
-                  </button>
-                ))}
-              </div>
-
-              {tab === "data" && <DataSection flight={flightDetail} />}
-              {tab === "tow" && (
-                <TowSection selected={flightDetail} allFlights={allFlights} />
-              )}
-              {tab === "map" && <MapSection flight={flightDetail} />}
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }
