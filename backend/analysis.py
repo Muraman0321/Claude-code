@@ -227,17 +227,19 @@ def _tow_release_index(
     fixes: list[Fix],
     metrics: list[FixMetrics],
     min_gain_m: float = 50.0,
-    release_threshold_ms: float = 1.0,
-    window_s: float = 10.0,
+    release_threshold_ms: float = 2.0,
+    window_s: float = 5.0,
+    max_tow_s: float = 120.0,
 ) -> int:
     """Return the index where tow release occurs.
 
-    Primary: first fix (after gaining min_gain_m) where the 10-second rolling
-    average climb rate drops to <= release_threshold_ms.  This matches the
-    definition 「平均上昇率が10秒以上1.0m/s以下」.
+    Primary: after gaining min_gain_m AND seeing a real rapid climb (> threshold),
+    find the first 5-second rolling window where average climb <= 2.0 m/s.
+    This detects the winch rope drop quickly without being fooled by an immediate
+    thermal after release.
 
-    Fallback: original logic — first descent after reaching min_gain_m, then
-    end of the first climb segment.
+    Hard cap: tow cannot exceed max_tow_s from takeoff.
+    Fallback: first descent after reaching min_gain_m.
     """
     if not fixes or not metrics:
         return 0
@@ -246,36 +248,42 @@ def _tow_release_index(
         (i for i, m in enumerate(metrics) if m.ground_speed_kmh > 15), 0
     )
     takeoff_alt = _altitude_for_display(fixes[move_start])
+    max_tow_time = fixes[move_start].timestamp + timedelta(seconds=max_tow_s)
 
-    # Primary: 10-second rolling average <= release_threshold_ms
+    # Primary: look for release only after we've seen a real rapid climb
+    seen_rapid_climb = False
     for i in range(move_start, len(fixes)):
+        if fixes[i].timestamp > max_tow_time:
+            return i
         if _altitude_for_display(fixes[i]) - takeoff_alt < min_gain_m:
             continue
-        target_time = fixes[i].timestamp + timedelta(seconds=window_s)
-        end_j = i
-        while end_j < len(fixes) - 1 and fixes[end_j].timestamp < target_time:
-            end_j += 1
-        window = metrics[i : end_j + 1]
-        if len(window) >= 3:
-            avg = sum(m.climb_rate_ms for m in window) / len(window)
-            if avg <= release_threshold_ms:
-                return i
+        if metrics[i].climb_rate_ms > release_threshold_ms:
+            seen_rapid_climb = True
+        if seen_rapid_climb:
+            target_time = fixes[i].timestamp + timedelta(seconds=window_s)
+            end_j = i
+            while end_j < len(fixes) - 1 and fixes[end_j].timestamp < target_time:
+                end_j += 1
+            window = metrics[i : end_j + 1]
+            if len(window) >= 3:
+                avg = sum(m.climb_rate_ms for m in window) / len(window)
+                if avg <= release_threshold_ms:
+                    return i
 
     # Fallback: first descent after gaining enough altitude.
     peak_alt = takeoff_alt
     for i in range(move_start, len(metrics)):
+        if fixes[i].timestamp > max_tow_time:
+            return i
         alt = _altitude_for_display(fixes[i])
         if alt > peak_alt:
             peak_alt = alt
         if peak_alt - takeoff_alt >= min_gain_m and metrics[i].climb_rate_ms < 0:
             return i
 
-    # Last fallback: end of the first climb segment.
-    in_climb = False
-    for i in range(move_start, len(metrics)):
-        if metrics[i].climb_rate_ms > 0.1:
-            in_climb = True
-        elif in_climb:
+    # Hard cap fallback.
+    for i in range(move_start, len(fixes)):
+        if fixes[i].timestamp > max_tow_time:
             return i
 
     return move_start
