@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { AltitudeChart } from "../components/Charts";
 import type { FlightDetail, FlightPhaseAnalysis } from "../types";
+import { computeFlightPhaseAnalysis } from "../utils/phaseAnalysis";
 import { fmtDate, fmtNum } from "../utils/format";
 
 export default function FlightPhasePage() {
@@ -16,13 +17,11 @@ export default function FlightPhasePage() {
     if (!id) return;
     setLoading(true);
     setError(null);
-    Promise.all([
-      api.getFlight(Number(id)),
-      api.getFlightPhaseAnalysis(Number(id)),
-    ])
-      .then(([f, p]) => {
+    api
+      .getFlight(Number(id))
+      .then((f) => {
         setFlight(f);
-        setPhase(p);
+        setPhase(computeFlightPhaseAnalysis(f.id, f.fixes));
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));

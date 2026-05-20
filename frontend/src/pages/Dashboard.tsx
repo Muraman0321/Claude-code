@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { FileUpload } from "../components/FileUpload";
 import type { FlightSummary } from "../types";
 import { fmtDate, fmtDuration, fmtNum } from "../utils/format";
+import { hasFlightTrack } from "../utils/flightFilter";
 
 export default function Dashboard() {
   const [flights, setFlights] = useState<FlightSummary[]>([]);
@@ -38,6 +39,7 @@ export default function Dashboard() {
   const [cleanBusy, setCleanBusy] = useState(false);
   const [deleteAllBusy, setDeleteAllBusy] = useState(false);
   const [reanalyzeBusy, setReanalyzeBusy] = useState<number | null>(null);
+  const [reanalyzeAllProgress, setReanalyzeAllProgress] = useState<{ done: number; total: number } | null>(null);
 
   async function handleDelete(id: number) {
     if (!confirm("このフライトを削除しますか？")) return;
@@ -86,6 +88,26 @@ export default function Dashboard() {
     }
   }
 
+  async function handleReanalyzeAll() {
+    if (!confirm("全フライトのサーマルを保存済みIGCから再解析します。件数が多いと時間がかかります。よろしいですか？")) return;
+    setReanalyzeAllProgress({ done: 0, total: 0 });
+    try {
+      const result = await api.reanalyzeAllThermals((done, total) =>
+        setReanalyzeAllProgress({ done, total }),
+      );
+      const failMsg = result.failures > 0 ? `（${result.failures} 件はIGC未保存などでスキップ）` : "";
+      alert(`全再解析完了: ${result.flights} フライト中 ${result.thermals} 件のサーマルを検出${failMsg}`);
+      refresh();
+    } catch (e) {
+      alert(`エラー: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setReanalyzeAllProgress(null);
+    }
+  }
+
+  // Hide thermals-only records (no GPS track) from the flight list.
+  const visibleFlights = flights.filter(hasFlightTrack);
+
   return (
     <div>
       <h1>ダッシュボード</h1>
@@ -109,8 +131,24 @@ export default function Dashboard() {
 
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2>フライト一覧 ({flights.length} 件)</h2>
+          <h2>フライト一覧 ({visibleFlights.length} 件)</h2>
           <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              onClick={handleReanalyzeAll}
+              disabled={reanalyzeAllProgress !== null || flights.length === 0}
+              style={{
+                padding: "0.3rem 0.8rem",
+                background: reanalyzeAllProgress !== null ? "#ccc" : "#f6f8fa",
+                border: "1px solid #d0d7de",
+                borderRadius: "6px",
+                cursor: (reanalyzeAllProgress !== null || flights.length === 0) ? "not-allowed" : "pointer",
+                fontSize: "0.85rem",
+              }}
+            >
+              {reanalyzeAllProgress !== null
+                ? `再解析中... ${reanalyzeAllProgress.done}/${reanalyzeAllProgress.total}`
+                : "全再解析"}
+            </button>
             <button
               onClick={handleCleanDuplicates}
               disabled={cleanBusy}
@@ -142,7 +180,7 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
-        {flights.length === 0 ? (
+        {visibleFlights.length === 0 ? (
           <div className="empty">フライトがまだありません。IGCファイルをアップロードしてください。</div>
         ) : (
           <table>
@@ -161,7 +199,7 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody>
-              {flights.map((f) => (
+              {visibleFlights.map((f) => (
                 <tr key={f.id}>
                   <td>{fmtDate(f.flight_date)}</td>
                   <td><strong>{f.pilot}</strong></td>

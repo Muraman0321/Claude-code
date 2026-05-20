@@ -25,6 +25,7 @@ import type {
   WeatherBucket,
 } from "../types";
 import { AnalyzeError, analyzeIgcFile } from "../utils/analyzeIgc";
+import { computeFlightPhaseAnalysis } from "../utils/phaseAnalysis";
 import { ensureSession } from "../lib/storage/auth";
 import * as flightsDb from "../lib/storage/flights";
 import { fetchWeather } from "../lib/weather/openMeteo";
@@ -106,19 +107,34 @@ export const api = {
   },
 
   async getFlightPhaseAnalysis(id: number): Promise<FlightPhaseAnalysis> {
-    const response = await fetch(`/api/flights/${id}/phase-analysis`);
-    if (!response.ok) {
-      throw new Error(`phase analysis failed: ${response.statusText}`);
-    }
-    return response.json();
+    await ensureSession();
+    const detail = await flightsDb.getFlight(id);
+    return computeFlightPhaseAnalysis(id, detail.fixes);
   },
 
   async reanalyzeThermals(id: number): Promise<{ thermal_count: number }> {
-    const response = await fetch(`/api/flights/${id}/reanalyze`, { method: "POST" });
-    if (!response.ok) {
-      throw new Error(`reanalyze failed: ${response.statusText}`);
+    await ensureSession();
+    return flightsDb.reanalyzeFlightThermals(id);
+  },
+
+  async reanalyzeAllThermals(
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ flights: number; thermals: number; failures: number }> {
+    await ensureSession();
+    const flights = await flightsDb.listFlights();
+    let thermals = 0;
+    let failures = 0;
+    for (let i = 0; i < flights.length; i++) {
+      try {
+        const r = await flightsDb.reanalyzeFlightThermals(flights[i].id);
+        thermals += r.thermal_count;
+      } catch (e) {
+        console.warn(`reanalyze failed for flight ${flights[i].id}:`, e);
+        failures++;
+      }
+      onProgress?.(i + 1, flights.length);
     }
-    return response.json();
+    return { flights: flights.length, thermals, failures };
   },
 
   async deleteFlight(id: number): Promise<void> {

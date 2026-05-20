@@ -7,6 +7,8 @@ import type {
   ThermalLight,
   FlightTrack,
 } from "../../types";
+import { computeFixMetrics, computeSummary, detectThermals } from "../../utils/analysis";
+import { parseIgcText } from "../../utils/igcParser";
 import { FIXES_BUCKET, supabase } from "./supabase";
 
 interface FlightRow {
@@ -336,6 +338,71 @@ export async function updateWeather(
   return rowToSummary(data as FlightRow);
 }
 
+/**
+ * Re-detect thermals + recompute summary from the stored raw IGC, replacing the
+ * flight's thermal rows. Browser-side replacement for the old
+ * POST /api/flights/{id}/reanalyze. Useful when thermals were accidentally
+ * deleted or the detection algorithm changed.
+ */
+export async function reanalyzeFlightThermals(id: number): Promise<{ thermal_count: number }> {
+  const owner = await currentOwner();
+
+  const { data, error } = await supabase
+    .from("flights")
+    .select("raw_igc, summary")
+    .eq("id", id)
+    .single();
+  if (error) throw new Error(error.message);
+  const row = data as { raw_igc: string | null; summary: Record<string, number | null> | null };
+  if (!row.raw_igc) throw new Error("このフライトには元のIGCデータが保存されていません");
+
+  const igc = parseIgcText(row.raw_igc);
+  if (igc.fixes.length === 0) throw new Error("保存されたIGCにGPS記録がありません");
+  const metrics = computeFixMetrics(igc.fixes);
+  const thermals = detectThermals(igc.fixes, metrics);
+  const summary = computeSummary(igc.fixes, metrics, thermals);
+
+  // Replace thermal rows.
+  const { error: delErr } = await supabase.from("thermals").delete().eq("flight_id", id);
+  if (delErr) throw new Error(delErr.message);
+
+  if (thermals.length > 0) {
+    const rows = thermals.map((t) => ({
+      owner,
+      flight_id: id,
+      start_time: t.start_time,
+      end_time: t.end_time,
+      duration_s: t.duration_s,
+      altitude_gain_m: t.altitude_gain_m,
+      avg_climb_rate_ms: t.avg_climb_rate_ms,
+      center_lat: t.center_lat,
+      center_lon: t.center_lon,
+      start_lat: t.start_lat,
+      start_lon: t.start_lon,
+      end_lat: t.end_lat,
+      end_lon: t.end_lon,
+    }));
+    const { error: insErr } = await supabase.from("thermals").insert(rows);
+    if (insErr) throw new Error(insErr.message);
+  }
+
+  // Merge the recomputed thermal stats back into the summary jsonb.
+  const updatedSummary = {
+    ...(row.summary ?? {}),
+    thermal_count: summary.thermal_count,
+    thermal_time_s: summary.thermal_time_s,
+    avg_climb_in_thermals_ms: summary.avg_climb_rate_in_thermals_ms,
+    cruise_time_s: summary.cruise_time_s,
+  };
+  const { error: updErr } = await supabase
+    .from("flights")
+    .update({ summary: updatedSummary })
+    .eq("id", id);
+  if (updErr) throw new Error(updErr.message);
+
+  return { thermal_count: thermals.length };
+}
+
 /** Remove duplicate flight records (same pilot + started_at), keeping the highest id. Returns count deleted. */
 export async function cleanDuplicateFlights(): Promise<number> {
   const { data, error } = await supabase
@@ -344,12 +411,16 @@ export async function cleanDuplicateFlights(): Promise<number> {
     .order("id", { ascending: true });
   if (error) throw new Error(error.message);
 
-  // Group by (pilot, started_at). For flights with null started_at, group by (pilot, flight_date).
+  // Only dedup flights that share an EXACT start timestamp (same pilot + same
+  // started_at = the same flight uploaded twice). Flights without a recorded
+  // started_at are treated as unique — grouping them by (pilot, flight_date)
+  // would wrongly merge legitimately distinct same-day flights and delete them,
+  // taking their thermals down with them (thermals cascade-delete on flight).
   const groups = new Map<string, number[]>();
   for (const row of data as { id: number; pilot: string; started_at: string | null; flight_date: string }[]) {
     const key = row.started_at
       ? `${row.pilot.toLowerCase()}|${row.started_at}`
-      : `${row.pilot.toLowerCase()}|date:${row.flight_date}`;
+      : `unique:${row.id}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(row.id);
   }

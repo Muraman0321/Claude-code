@@ -3,6 +3,7 @@ import { Circle, MapContainer, Polygon, Polyline, TileLayer, Tooltip } from "rea
 import { api } from "../api/client";
 import type { FlightSummary, FlightTrack, ThermalLight } from "../types";
 import { fmtDate, fmtDuration, fmtNum } from "../utils/format";
+import { hasFlightTrack } from "../utils/flightFilter";
 
 type SortKey =
   | "flight_date"
@@ -131,6 +132,7 @@ export default function Compare() {
 
   const filtered = useMemo(() => {
     return flights.filter((f) =>
+      hasFlightTrack(f) &&
       (!filterPilot || f.pilot === filterPilot) &&
       (!filterAircraft || f.aircraft === filterAircraft)
     );
