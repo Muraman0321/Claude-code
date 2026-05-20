@@ -305,6 +305,29 @@ export async function deleteFlight(id: number): Promise<void> {
   await deleteFixesFile(id);
 }
 
+export async function deleteAllFlights(): Promise<number> {
+  const owner = await currentOwner();
+  const { data: flights, error } = await supabase
+    .from("flights")
+    .select("id")
+    .eq("owner", owner);
+  if (error) throw new Error(error.message);
+  if (!flights || flights.length === 0) return 0;
+
+  const ids = (flights as { id: number }[]).map((f) => f.id);
+
+  // Delete storage files
+  const paths = ids.map((id) => `${id}.json`);
+  await supabase.storage.from(FIXES_BUCKET).remove(paths);
+
+  // Delete thermals then flights
+  await supabase.from("thermals").delete().in("flight_id", ids);
+  const { error: delErr } = await supabase.from("flights").delete().eq("owner", owner);
+  if (delErr) throw new Error(delErr.message);
+
+  return ids.length;
+}
+
 export async function updateWeather(
   id: number,
   weather: Record<string, number | string | null>,

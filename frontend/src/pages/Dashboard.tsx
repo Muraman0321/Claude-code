@@ -36,12 +36,27 @@ export default function Dashboard() {
   }, [filterPilot, filterAircraft, filterFrom, filterTo]);
 
   const [cleanBusy, setCleanBusy] = useState(false);
+  const [deleteAllBusy, setDeleteAllBusy] = useState(false);
   const [reanalyzeBusy, setReanalyzeBusy] = useState<number | null>(null);
 
   async function handleDelete(id: number) {
     if (!confirm("このフライトを削除しますか？")) return;
     await api.deleteFlight(id);
     refresh();
+  }
+
+  async function handleDeleteAll() {
+    if (!confirm(`全フライト (${flights.length} 件) を削除します。この操作は元に戻せません。よろしいですか？`)) return;
+    setDeleteAllBusy(true);
+    try {
+      const n = await api.deleteAllFlights();
+      alert(`${n} 件のフライトを削除しました。`);
+      refresh();
+    } catch (e) {
+      alert(`エラー: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setDeleteAllBusy(false);
+    }
   }
 
   async function handleCleanDuplicates() {
@@ -95,20 +110,37 @@ export default function Dashboard() {
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2>フライト一覧 ({flights.length} 件)</h2>
-          <button
-            onClick={handleCleanDuplicates}
-            disabled={cleanBusy}
-            style={{
-              padding: "0.3rem 0.8rem",
-              background: cleanBusy ? "#ccc" : "#f6f8fa",
-              border: "1px solid #d0d7de",
-              borderRadius: "6px",
-              cursor: cleanBusy ? "not-allowed" : "pointer",
-              fontSize: "0.85rem",
-            }}
-          >
-            {cleanBusy ? "削除中..." : "重複を削除"}
-          </button>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              onClick={handleCleanDuplicates}
+              disabled={cleanBusy}
+              style={{
+                padding: "0.3rem 0.8rem",
+                background: cleanBusy ? "#ccc" : "#f6f8fa",
+                border: "1px solid #d0d7de",
+                borderRadius: "6px",
+                cursor: cleanBusy ? "not-allowed" : "pointer",
+                fontSize: "0.85rem",
+              }}
+            >
+              {cleanBusy ? "削除中..." : "重複を削除"}
+            </button>
+            <button
+              onClick={handleDeleteAll}
+              disabled={deleteAllBusy || flights.length === 0}
+              style={{
+                padding: "0.3rem 0.8rem",
+                background: deleteAllBusy ? "#ccc" : "#fff0f0",
+                border: "1px solid #cf222e",
+                borderRadius: "6px",
+                cursor: (deleteAllBusy || flights.length === 0) ? "not-allowed" : "pointer",
+                fontSize: "0.85rem",
+                color: "#cf222e",
+              }}
+            >
+              {deleteAllBusy ? "削除中..." : "全削除"}
+            </button>
+          </div>
         </div>
         {flights.length === 0 ? (
           <div className="empty">フライトがまだありません。IGCファイルをアップロードしてください。</div>

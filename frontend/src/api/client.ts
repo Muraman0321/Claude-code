@@ -274,6 +274,11 @@ export const api = {
     return flightsDb.cleanDuplicateFlights();
   },
 
+  async deleteAllFlights(): Promise<number> {
+    await ensureSession();
+    return flightsDb.deleteAllFlights();
+  },
+
   async refreshWeather(id: number): Promise<FlightSummary> {
     await ensureSession();
     const detail = await flightsDb.getFlight(id);
